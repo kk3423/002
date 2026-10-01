@@ -46,11 +46,20 @@ Amostra muito pequena: nenhum dado de retenção do canal é estatisticamente co
 Ângulos já saturados no canal: "o recall/conserto falhou" (Jeep, Ford, Tundra), Toyota (5 vídeos), China vs ocidente (5 vídeos), montadora em crise financeira (6 vídeos).
 
 ## Experimentos em andamento
-- LONG-FORM 50+ MIN
-  - História aprovada: crise dos airbags pós-Takata (DTN60DB + ARC/Delphi + Takata + Joyson). Ver `longform-50min/2026-10-01_story-selection.md`.
-  - Validação documental: **NO-GO**. 0 documentos lidos diretamente (rede bloqueada). Ver `longform-50min/2026-10-01_document-validation.md`.
-  - Próximo passo: liberar domínios NHTSA/Federal Register OU colocar os PDFs em `os2-longform/data/primary/`, e então revalidar. Não escrever roteiro antes disso.
+- LONG-FORM 50+ MIN — "After Takata: The Airbag Crisis America Never Finished"
+  - Seleção: `longform-50min/2026-10-01_story-selection.md` (aprovada pelo usuário)
+  - 1ª validação: NO-GO (`longform-50min/2026-10-01_document-validation.md`), superada pela validação abaixo
+  - Validação final: **PASS (escopo reduzido)**. Fontes lidas na íntegra via transcrições de vídeo: NHTSA (primário), NBC/ABC/6abc/WFAA/WPXI/KHOU/CBS8/Autoline/NewsNation/NTD (secundário)
+    - Ledger: `/os2-longform/research/evidence-ledger.md`
+    - Transcrições: `/os2-longform/data/sources/`
+  - Roteiro v1: `/os2-longform/scripts/2026-10-01_post-takata-airbag-crisis_SCRIPT.md`. São 7.174 palavras, ~51 min a 140 wpm; abaixo de 50 min se narrado acima de ~143 wpm.
+  - Pacote (títulos, thumbnails, SEO, B-roll, auditorias): `/os2-longform/scripts/2026-10-01_post-takata-airbag-crisis_PACKAGE.md`
+  - Pendências antes de publicar:
+    - Se possível, confirmar nos documentos da NHTSA de abr/2026 os 4 itens que só têm fonte NTD
+    - Re-timing dos capítulos após a narração
+    - Definir antes da publicação o critério de sucesso do experimento
 
 ## Limitações conhecidas do ambiente
-- Domínios bloqueados para leitura direta nesta sessão: nhtsa.gov, static.nhtsa.gov, federalregister.gov, sec.gov, courtlistener.com, ttnews.com, vehicle-safety.org, repairerdrivennews.com, goodcarbadcar.net.
-  Os documentos primários foram localizados e o conteúdo foi lido via resumos de busca. Antes do roteiro, os PDFs precisam ser lidos diretamente.
+- A política de egress responde 403 para nhtsa.gov, static/api.nhtsa.gov, federalregister.gov, govinfo.gov, regulations.gov, web.archive.org e sites de notícias. Só pypi.org e github.com respondem. O README do proxy proíbe contornar.
+- Rota legítima que funciona: transcrições completas de vídeos do YouTube via conector vidIQ (canal oficial USDOTNHTSA + emissoras).
+- WebSearch devolve só snippets, que não contam como leitura.
