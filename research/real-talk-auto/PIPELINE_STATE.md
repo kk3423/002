@@ -46,8 +46,10 @@ Amostra muito pequena: nenhum dado de retenção do canal é estatisticamente co
 Ângulos já saturados no canal: "o recall/conserto falhou" (Jeep, Ford, Tundra), Toyota (5 vídeos), China vs ocidente (5 vídeos), montadora em crise financeira (6 vídeos).
 
 ## Experimentos em andamento
-- LONG-FORM 50+ MIN — etapa: seleção de história concluída, aguardando aprovação.
-  Ver `longform-50min/2026-10-01_story-selection.md`.
+- LONG-FORM 50+ MIN
+  - História aprovada: crise dos airbags pós-Takata (DTN60DB + ARC/Delphi + Takata + Joyson). Ver `longform-50min/2026-10-01_story-selection.md`.
+  - Validação documental: **NO-GO**. 0 documentos lidos diretamente (rede bloqueada). Ver `longform-50min/2026-10-01_document-validation.md`.
+  - Próximo passo: liberar domínios NHTSA/Federal Register OU colocar os PDFs em `os2-longform/data/primary/`, e então revalidar. Não escrever roteiro antes disso.
 
 ## Limitações conhecidas do ambiente
 - Domínios bloqueados para leitura direta nesta sessão: nhtsa.gov, static.nhtsa.gov, federalregister.gov, sec.gov, courtlistener.com, ttnews.com, vehicle-safety.org, repairerdrivennews.com, goodcarbadcar.net.
