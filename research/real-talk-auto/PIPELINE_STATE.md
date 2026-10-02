@@ -54,6 +54,7 @@ Amostra muito pequena: nenhum dado de retenção do canal é estatisticamente co
     - Transcrições: `/os2-longform/data/sources/`
   - Roteiro v1: `/os2-longform/scripts/2026-10-01_post-takata-airbag-crisis_SCRIPT.md`. São 7.174 palavras, ~51 min a 140 wpm; abaixo de 50 min se narrado acima de ~143 wpm.
   - Pacote (títulos, thumbnails, SEO, B-roll, auditorias): `/os2-longform/scripts/2026-10-01_post-takata-airbag-crisis_PACKAGE.md`
+  - Auditoria pré-produção (2026-10-02): NEED MICRO-EDITS, 20 itens, ver `/os2-longform/scripts/2026-10-02_pre-production-audit.md`. Projeção: 7.140 palavras, ≤142,8 wpm para 50+. Título: A. Thumbnail: "WHO MADE THIS?".
   - Pendências antes de publicar:
     - Se possível, confirmar nos documentos da NHTSA de abr/2026 os 4 itens que só têm fonte NTD
     - Re-timing dos capítulos após a narração
