@@ -11,7 +11,7 @@ If you drive a used car — especially one that has been in a crash before — t
 
 Because this isn't the only airbag problem on American roads right now. It's one of three. And the free tool most people trust to check their car can only show you some of them.
 
- The second: in 2023, the federal government demanded a recall of tens of millions of airbag inflators. The company that made them said no. The third, many people assume is over. In February 2026, one automaker told the owners of about two hundred and twenty-five thousand vehicles, in plain words: do not drive.
+The second: in 2023, the federal government demanded a recall of tens of millions of airbag inflators. The company that made them said no. The third, many people assume is over. In February 2026, one automaker told the owners of about two hundred and twenty-five thousand vehicles, in plain words: do not drive.
 
 Three different failures. One part of the car you never see, never service, and never think about.
 
@@ -120,7 +120,7 @@ And it still isn't finished.
 ## 13:46 Takata: The Recall That Never Finished
 NHTSA puts it plainly: "There are millions of defective Takata air bags on the road that need repair." The problem is the chemical inside — and "the greatest risk is in older vehicles, especially vehicles driven in hot, humid areas."
 
-So the warnings escalated. In May 2023, a "do not drive" warning went out for about 90,000 BMW vehicles built between 2000 and 2006 — cars already under a Takata recall. Parts, repair and towing: all free.
+Over time, the warnings escalated — from "get this fixed" to "stop driving." In May 2023, a "do not drive" warning went out for about 90,000 BMW vehicles built between 2000 and 2006 — cars already under a Takata recall. Parts, repair and towing: all free.
 
 In Texas, WFAA reported that Carfax had identified the state as leading the country in vehicles still carrying recalled Takata airbags. One viewer's 2013 car still showed "repair not yet available" in 2025. Nothing moved — until he filed a formal complaint with NHTSA and asked the manufacturer, in writing, for an explanation. Then the dealer took the car in and gave him a loaner, at no cost. For one owner, persistence closed the gap.
 
