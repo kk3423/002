@@ -1,0 +1,871 @@
+diff -u a/commercial-profile-reader.js b/commercial-profile-reader.js
+--- a/commercial-profile-reader.js	2026-10-02 22:15:46.104266970 +0000
++++ b/commercial-profile-reader.js	2026-10-02 22:15:46.106717159 +0000
+@@ -1,5 +1,7 @@
+-/* PATCHED 13 TEST: ordinary web profile request, serial and fail closed.
+- * A live public commercial-contact response has not yet been confirmed.
++/* PATCHED 14: one ordinary web_profile_info request per profile, serial and
++ * fail closed. Every real response is summarised (field names, profile flags,
++ * masked email) so the commercial-contact field can be verified, not guessed.
++ * A live public commercial contact has not yet been confirmed.
+  */
+ (function (root, factory) {
+   var api = factory();
+@@ -7,23 +9,20 @@
+   else root.IGCommercialProfileReader = api;
+ })(typeof window !== "undefined" ? window : globalThis, function () {
+   "use strict";
++  var endpoint = "instagram_web_profile_info";
+   var cooldownKey = "ig_contact_cooldown_until";
+-  var unavailableKey = "ig_commercial_web_contact_unavailable_v13";
++  var schemaKey = "ig_commercial_contact_schema_v14";
++  var evidenceKey = "ig_commercial_contact_evidence_v14";
+   var lastStartKey = "ig_commercial_web_last_start";
+   var lockName = "ig-commercial-profile-read";
+   var own = Object.prototype.hasOwnProperty;
+-  var blocks = ["professional_contact_info", "professional_metadata", "public_contact_info", "business_contact_info"];
+-  function marked(value) { return value === true || value === 1 || value === "true" || value === "1"; }
+-  function hasEmailField(user) {
+-    if (own.call(user, "public_email") || own.call(user, "business_email")) return true;
+-    return blocks.some(function (key) {
+-      var info = user[key];
+-      return info && typeof info === "object" && !Array.isArray(info) &&
+-        (own.call(info, "public_email") || own.call(info, "business_email") ||
+-          (own.call(info, "email") && (key === "public_contact_info" || marked(info.is_public) ||
+-            marked(info.should_show_public_contacts) || marked(user.should_show_public_contacts))));
+-    });
+-  }
++  var professionalTypes = ["business", "creator", "professional"];
++  // Omission blocks the route only after repeated professional profiles and no
++  // response with the field: personal or unknown accounts never count.
++  var omittedProfessionalLimit = 3, evidenceLimit = 20, listLimit = 10;
++  var flagFields = ["account_type", "is_business_account", "is_professional_account", "is_business",
++    "should_show_public_contacts", "business_contact_method", "is_private"];
++
+   function retryUntil(value, now) {
+     var raw = String(value == null ? "" : value).trim();
+     if (/^\d+(?:\.\d+)?$/.test(raw)) return now + Math.max(10, Number(raw)) * 1000;
+@@ -37,9 +36,163 @@
+     if (response) error.response = response;
+     return error;
+   }
++  function maskEmail(value) {
++    var s = String(value || ""), at = s.indexOf("@");
++    return at > 0 ? s.charAt(0) + "***" + s.slice(at) : "";
++  }
++  function readSchema(value) {
++    var schema = { endpoint: endpoint, keysPresent: 0, keysPresentUsers: [], omittedProfessional: [], omittedOther: 0, updatedAt: 0 };
++    if (!value || typeof value !== "object" || value.endpoint !== endpoint) return schema;
++    schema.keysPresent = Number(value.keysPresent) || 0;
++    schema.omittedOther = Number(value.omittedOther) || 0;
++    schema.updatedAt = Number(value.updatedAt) || 0;
++    ["keysPresentUsers", "omittedProfessional"].forEach(function (key) {
++      schema[key] = Array.isArray(value[key]) ? value[key].slice(-listLimit) : [];
++    });
++    return schema;
++  }
++  function unsupported(value) {
++    var schema = readSchema(value);
++    return schema.keysPresent === 0 && schema.omittedProfessional.length >= omittedProfessionalLimit;
++  }
++  function remember(list, username) {
++    return list.indexOf(username) >= 0 ? list : list.concat(username).slice(-listLimit);
++  }
++  function locate(body) {
++    // web_profile_info envelope, as in the extension's ApiProfileInfo config: { data: { user } }.
++    var data = body && typeof body === "object" ? body.data : null;
++    if (!data || typeof data !== "object" || !own.call(data, "user")) return { known: false, user: null };
++    var user = data.user;
++    return { known: true, user: user && typeof user === "object" && !Array.isArray(user) ? user : null };
++  }
+   function create(deps) {
+     var cache = new Map();
+-    return async function read(userId, username, isCurrent) {
++    function assertOpen(saved, probe) {
++      if (Number(saved[cooldownKey]) > deps.now()) {
++        var cooldown = stopped("O Instagram está em pausa. Aguarde o horário indicado.", "cooldown");
++        cooldown.cooldownUntil = Number(saved[cooldownKey]);
++        throw cooldown;
++      }
++      // A manual one-profile check may re-evaluate the route; the queue may not.
++      if (!probe && unsupported(saved[schemaKey])) {
++        throw stopped("A consulta web não trouxe o campo de e-mail comercial em perfis profissionais. A fila está interrompida; use a verificação de 1 perfil para reavaliar.", "unsupported");
++      }
++    }
++    function record(entry) {
++      return Promise.resolve().then(function () { return deps.storage.get(evidenceKey); }).then(function (saved) {
++        var list = saved && Array.isArray(saved[evidenceKey]) ? saved[evidenceKey] : [];
++        return deps.storage.set({ [evidenceKey]: [entry].concat(list).slice(0, evidenceLimit) });
++      }).catch(function () { /* diagnostics must never change the collection result */ });
++    }
++    function updateSchema(username, contact) {
++      return deps.storage.get(schemaKey).then(function (saved) {
++        var schema = readSchema(saved[schemaKey]);
++        if (contact.emailFieldReturned) {
++          schema.keysPresent += 1;
++          schema.keysPresentUsers = remember(schema.keysPresentUsers, username);
++        } else if (contact.emailStatus === "omitted" && professionalTypes.indexOf(contact.profileType) >= 0) {
++          schema.omittedProfessional = remember(schema.omittedProfessional, username);
++        } else {
++          schema.omittedOther += 1;
++        }
++        schema.updatedAt = deps.now();
++        return deps.storage.set({ [schemaKey]: schema }).then(function () { return schema; });
++      });
++    }
++    function skip(outcome, entry) {
++      entry.outcome = outcome;
++      return { contactSkip: true, contactOutcome: outcome, contactEndpoint: endpoint };
++    }
++    async function fetchProfile(username, userId, entry) {
++      var controller = new AbortController();
++      var timer = setTimeout(function () { controller.abort(); }, 30000);
++      var response, raw;
++      try {
++        try {
++          response = await deps.fetch("https://www.instagram.com/api/v1/users/web_profile_info/?username=" + encodeURIComponent(username), {
++            method: "GET", credentials: "include", redirect: "manual", cache: "no-store", signal: controller.signal,
++            headers: { Accept: "application/json", "X-IG-App-ID": "936619743392459", "X-Requested-With": "XMLHttpRequest" }
++          });
++        } catch (err) {
++          entry.outcome = "network";
++          throw stopped("Falha de rede ou tempo esgotado na consulta de contato. Coleta pausada, sem nova tentativa automática.", "network");
++        }
++        entry.http = response.status;
++        // Not followed: a login or checkpoint redirect is an access failure.
++        if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
++          entry.outcome = "redirect";
++          throw stopped("O Instagram redirecionou a consulta (login ou verificação). Coleta pausada, sem nova tentativa automática.", "redirect", { status: response.status });
++        }
++        if (response.status === 429) {
++          entry.retryAfter = response.headers.get("retry-after");
++          var latest = await deps.storage.get(cooldownKey);
++          var until = Math.max(Number(latest[cooldownKey]) || 0, retryUntil(entry.retryAfter, deps.now()));
++          await deps.storage.set({ [cooldownKey]: until });
++          entry.outcome = "rate_limit";
++          entry.cooldownUntil = until;
++          var limited = stopped("O Instagram limitou as consultas (HTTP 429). Coleta pausada até o horário indicado, sem nova tentativa automática.", "rate_limit", {
++            status: 429, headers: { "retry-after": new Date(until).toUTCString() }
++          });
++          limited.cooldownUntil = until;
++          throw limited;
++        }
++        try { raw = await response.text(); } catch (err) {
++          entry.outcome = "network";
++          throw stopped("Falha de rede ou tempo esgotado na consulta de contato. Coleta pausada, sem nova tentativa automática.", "network");
++        }
++      } finally { clearTimeout(timer); }
++      var body = null;
++      try { body = JSON.parse(raw); } catch (err) { body = null; }
++      var message = body && typeof body === "object" && typeof body.message === "string" ? body.message.slice(0, 120) : "";
++      if (message) entry.message = message;
++      if (response.status === 404) return skip("profile_unavailable", entry);
++      if (!response.ok) {
++        entry.outcome = "access";
++        throw stopped("O Instagram recusou a consulta de contato (HTTP " + response.status + (message ? ": " + message : "") + "). Coleta pausada, sem nova tentativa automática.", "access", { status: response.status });
++      }
++      if (!body || typeof body !== "object") {
++        entry.outcome = "invalid_response";
++        throw stopped("O Instagram devolveu uma página em vez de dados (possível login ou verificação). Coleta pausada, sem nova tentativa automática.", "invalid_response", { status: response.status });
++      }
++      if (body.status === "fail" || body.require_login || (Array.isArray(body.errors) && body.errors.length)) {
++        entry.outcome = "access";
++        throw stopped("O Instagram não autorizou a consulta de perfil" + (message ? " (" + message + ")" : "") + ". Coleta pausada, sem nova tentativa automática.", "access", { status: response.status });
++      }
++      var located = locate(body);
++      if (!located.known) {
++        entry.outcome = "unexpected_response";
++        throw stopped("A resposta do Instagram veio num formato desconhecido. Coleta pausada, sem nova tentativa automática.", "unexpected_response", { status: response.status });
++      }
++      // Missing or renamed profiles are per-row results, not session failures.
++      if (!located.user) return skip("profile_unavailable", entry);
++      var user = located.user;
++      var returnedName = String(user.username || "").toLowerCase(), returnedId = String(user.pk || user.id || "");
++      if (returnedName !== username || (userId && returnedId && returnedId !== userId)) {
++        entry.returnedUsername = returnedName.slice(0, 40);
++        return skip("identity_mismatch", entry);
++      }
++      var detail = deps.contacts.toDetailResponse(user, username), contact = detail.publicContactResult, flags = {};
++      flagFields.forEach(function (key) { if (own.call(user, key)) flags[key] = user[key]; });
++      entry.outcome = contact.emailStatus;
++      entry.profileType = contact.profileType;
++      entry.keys = contact.emailKeys;
++      entry.flags = flags;
++      entry.userKeys = Object.keys(user).sort().slice(0, 300);
++      entry.email = maskEmail(contact.email);
++      detail.contactEndpoint = endpoint;
++      detail.contactOutcome = contact.emailStatus;
++      detail.commercialContactFieldReturned = contact.emailFieldReturned;
++      return detail;
++    }
++    function decided(result, schemaValue, fromCache) {
++      var copy = Object.assign({}, result);
++      copy.commercialSchemaUnsupported = unsupported(schemaValue);
++      copy.commercialSchema = readSchema(schemaValue);
++      if (fromCache) copy.fromCache = true;
++      return copy;
++    }
++    return async function read(userId, username, isCurrent, options) {
++      var probe = !!(options && options.probe);
+       username = String(username || "").trim().replace(/^@/, "").toLowerCase();
+       userId = String(userId || "");
+       if (!/^[a-z0-9_](?:[a-z0-9_.]{0,28}[a-z0-9_])?$/.test(username)) {
+@@ -53,74 +206,35 @@
+       return deps.locks.request(lockName, async function () {
+         try {
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+-          var saved = await deps.storage.get([cooldownKey, unavailableKey, lastStartKey]);
+-          if (Number(saved[cooldownKey]) > deps.now()) {
+-            var cooldown = stopped("O Instagram está em pausa. Aguarde o horário indicado.", "cooldown");
+-            cooldown.cooldownUntil = Number(saved[cooldownKey]);
+-            throw cooldown;
+-          }
+-          if (saved[unavailableKey]) {
+-            throw stopped("A consulta web não incluiu os campos de e-mail comercial. A fila foi interrompida para evitar consultas sem esse campo.", "unsupported");
+-          }
+-          if (cache.has(cacheKey)) return cache.get(cacheKey);
++          var saved = await deps.storage.get([cooldownKey, schemaKey, lastStartKey]);
++          assertOpen(saved, probe);
++          if (cache.has(cacheKey)) return decided(cache.get(cacheKey), saved[schemaKey], true);
+           var delay = Math.max(0, Number(saved[lastStartKey]) + 10000 - deps.now());
+           if (delay) await deps.wait(delay);
+-          // Another dashboard can save a cooldown while this reader waits.
+-          saved = await deps.storage.get([cooldownKey, unavailableKey]);
+-          if (Number(saved[cooldownKey]) > deps.now()) {
+-            var changed = stopped("O Instagram está em pausa. Aguarde o horário indicado.", "cooldown");
+-            changed.cooldownUntil = Number(saved[cooldownKey]);
+-            throw changed;
+-          }
+-          if (saved[unavailableKey]) throw stopped("A consulta web não disponibilizou o e-mail comercial. Coleta pausada.", "unsupported");
++          // Another dashboard can save a cooldown or a decision while this reader waits.
++          saved = await deps.storage.get([cooldownKey, schemaKey]);
++          assertOpen(saved, probe);
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+           await deps.storage.set({ [lastStartKey]: deps.now() });
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+-          var controller = new AbortController();
+-          var timer = setTimeout(function () { controller.abort(); }, 30000);
+-          var response, body;
+-          try {
+-            response = await deps.fetch("https://www.instagram.com/api/v1/users/web_profile_info/?username=" + encodeURIComponent(username), {
+-              method: "GET", credentials: "include", redirect: "error", cache: "no-store", signal: controller.signal,
+-              headers: { Accept: "application/json", "X-IG-App-ID": "936619743392459", "X-Requested-With": "XMLHttpRequest" }
+-            });
+-            if (response.status === 429) {
+-              var latest = await deps.storage.get(cooldownKey);
+-              var until = Math.max(Number(latest[cooldownKey]) || 0, retryUntil(response.headers.get("retry-after"), deps.now()));
+-              await deps.storage.set({ [cooldownKey]: until });
+-              var rateLimited = stopped("O Instagram limitou as consultas. Coleta pausada.", "rate_limit", {
+-                status: 429, headers: { "retry-after": new Date(until).toUTCString() }
+-              });
+-              rateLimited.cooldownUntil = until;
+-              throw rateLimited;
+-            }
+-            if (!response.ok) throw stopped("O Instagram recusou a consulta de contato. Coleta pausada.", "access", {status: response.status});
+-            body = await response.json();
+-          } finally { clearTimeout(timer); }
+-          if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+-          if (!body || body.status === "fail" || (Array.isArray(body.errors) && body.errors.length)) {
+-            throw stopped("O Instagram não autorizou uma resposta de perfil válida. Coleta pausada.", "access");
+-          }
+-          var user = deps.contacts.profileFromResponse({ data: body }, userId, username);
+-          if (!user || String(user.username || "").toLowerCase() !== username) {
+-            throw stopped("A resposta não corresponde ao perfil solicitado. Coleta pausada.", "identity");
+-          }
+-          var result = deps.contacts.toDetailResponse(user, username);
+-          result.commercialContactFieldReturned = hasEmailField(user);
+-          result.contactEndpoint = "instagram_web_profile_info";
+-          if (!result.commercialContactFieldReturned) {
+-            // Persist before returning the first profile; reloads must not repeat it.
+-            await deps.storage.set({ [unavailableKey]: { at: deps.now(), username: username, reason: "email_fields_omitted" } });
+-          }
++          var entry = { at: deps.now(), endpoint: endpoint, username: username, probe: probe, http: null, outcome: "" };
++          var result;
++          try { result = await fetchProfile(username, userId, entry); }
++          finally { await record(entry); }
++          var schemaValue = saved[schemaKey];
++          if (!result.contactSkip) schemaValue = await updateSchema(username, result.publicContactResult);
++          // Cache before the cancellation check so a resume never repeats this request.
+           cache.set(cacheKey, result);
+-          return result;
++          if (!active()) throw stopped("Consulta cancelada.", "cancelled");
++          return decided(result, schemaValue, false);
+         } catch (error) {
+-          if (error.commercialRequestStopped) throw error;
++          if (error && error.commercialRequestStopped) throw error;
+           throw stopped("Não foi possível concluir a consulta de contato. Coleta pausada, sem nova tentativa automática.", "request");
+         }
+       });
+     };
+   }
+-  return { create: create, hasEmailField: hasEmailField, retryUntil: retryUntil,
+-    unavailableKey: unavailableKey, cooldownKey: cooldownKey };
++  return { create: create, retryUntil: retryUntil, unsupported: unsupported, readSchema: readSchema, maskEmail: maskEmail,
++    endpoint: endpoint, cooldownKey: cooldownKey, schemaKey: schemaKey, evidenceKey: evidenceKey,
++    omittedProfessionalLimit: omittedProfessionalLimit };
+ });
+diff -u a/dashboard.js b/dashboard.js
+--- a/dashboard.js	2026-10-02 22:15:46.112358408 +0000
++++ b/dashboard.js	2026-10-02 22:15:46.114916719 +0000
+@@ -210,19 +210,45 @@
+                         1
+                       )
+                     : t._e(),
+-                  t.commercialStartRequired
++                  4 === t.type
+                     ? s("div", { staticClass: "main-box mb-3 p-4 has-text-centered" }, [
+-                        s("p", { staticClass: "mb-3" }, [t._v(
+-                          t.commercialContactUnavailable
+-                            ? "O Instagram omitiu o campo de e-mail comercial. A fila está interrompida."
+-                            : t.retryAfterUntil > t.contactStatusNow
+-                              ? "Coleta pausada até " + new Date(t.retryAfterUntil).toLocaleString()
+-                              : "Pronto para testar a coleta do e-mail comercial publicado no contato do perfil."
++                        s("p", { staticClass: "mb-2" }, [t._v(t.commercialStatusMessage())]),
++                        s("p", { staticClass: "mb-3 is-size-7" }, [t._v(
++                          t.contactRealProof
++                            ? "Contato comercial público já recebido numa resposta real: @" + t.contactRealProof.username + " (" + new Date(t.contactRealProof.at).toLocaleString() + ")."
++                            : "Ainda não há resposta real com contato comercial público nesta extensão."
+                         )]),
+-                        s("b-button", {
+-                          attrs: { type: "is-primary", disabled: t.commercialContactUnavailable || t.retryAfterUntil > t.contactStatusNow },
+-                          on: { click: t.handleToggleWorkStatus }
+-                        }, [t._v("Iniciar")])
++                        t.commercialStartRequired
++                          ? s("b-button", {
++                              staticClass: "mb-3",
++                              attrs: { type: "is-primary", disabled: t.commercialContactUnavailable || t.retryAfterUntil > t.contactStatusNow },
++                              on: { click: t.handleToggleWorkStatus }
++                            }, [t._v("Iniciar")])
++                          : t._e(),
++                        s("div", { staticClass: "is-flex is-justify-content-center is-align-items-center mb-2", staticStyle: { gap: "8px", "flex-wrap": "wrap" } }, [
++                          s("input", {
++                            staticClass: "input is-small", staticStyle: { "max-width": "300px" },
++                            attrs: { type: "text", placeholder: "@perfil com Contato → E-mail visível no app", disabled: t.contactProbeRunning },
++                            domProps: { value: t.contactProbeUsername },
++                            on: { input: function (ev) { t.contactProbeUsername = ev.target.value; } }
++                          }),
++                          s("b-button", {
++                            attrs: { size: "is-small", type: "is-info", disabled: t.contactProbeRunning || (!t.isPaused && !t.isComplete) || t.retryAfterUntil > t.contactStatusNow },
++                            on: { click: t.handleContactProbe }
++                          }, [t._v(t.contactProbeRunning ? "Consultando..." : "Verificar 1 perfil")]),
++                          s("b-button", {
++                            attrs: { size: "is-small", disabled: !t.contactEvidence.length },
++                            on: { click: t.handleCopyContactDiagnostic }
++                          }, [t._v("Copiar diagnóstico")])
++                        ]),
++                        t.contactEvidence.length
++                          ? s("textarea", {
++                              staticClass: "textarea is-small contact-diagnostic",
++                              staticStyle: { "font-family": "monospace", "font-size": "11px" },
++                              attrs: { readonly: true, rows: 8 },
++                              domProps: { value: t.contactDiagnosticText }
++                            })
++                          : t._e()
+                       ], 1)
+                     : t._e(),
+                   t.user.id
+@@ -3139,6 +3165,11 @@
+             commercialContactUnavailable: false,
+             commercialProfileReader: null,
+             contactStatusNow: Date.now(),
++            contactEvidence: [],
++            contactSchema: null,
++            contactProbeUsername: "",
++            contactProbeRunning: false,
++            consecutiveUnavailableProfiles: 0,
+           };
+         },
+         filters: {
+@@ -3187,11 +3218,41 @@
+               return "" !== t.phone;
+             });
+           },
++          contactRealProof: function () {
++            return this.contactEvidence.filter(function (entry) { return entry && "found" === entry.outcome; })[0] || null;
++          },
++          contactDiagnosticText: function () {
++            var reader = window.IGCommercialProfileReader, schema = this.contactSchema || reader.readSchema(null), proof = this.contactRealProof;
++            var when = function (ms) { return ms ? new Date(ms).toLocaleString() : "-"; };
++            var names = function (list) { return list.length ? " (@" + list.join(", @") + ")" : ""; };
++            var lines = [
++              "Autland IG Extractor " + this.version,
++              "Consulta: GET www.instagram.com/api/v1/users/web_profile_info/ (" + reader.endpoint + ")",
++              "Pausa salva: " + (this.retryAfterUntil > this.contactStatusNow ? "até " + when(this.retryAfterUntil) : "nenhuma ativa"),
++              "Campo de e-mail presente em " + schema.keysPresent + " resposta(s)" + names(schema.keysPresentUsers) +
++                "; omitido em " + schema.omittedProfessional.length + " perfil(is) profissional(is)" + names(schema.omittedProfessional) +
++                "; outras respostas sem o campo: " + schema.omittedOther,
++              "Decisão da fila: " + (reader.unsupported(schema) ? "bloqueada para esta consulta" : "liberada"),
++              "Contato comercial público em resposta real: " + (proof ? "SIM — @" + proof.username + " em " + when(proof.at) + " (" + proof.email + ")" : "NÃO comprovado"),
++              "Últimas respostas reais (mais recente primeiro):"
++            ];
++            this.contactEvidence.slice(0, 8).forEach(function (entry, i) {
++              var keys = entry.keys ? Object.keys(entry.keys).map(function (k) { return k + "=" + entry.keys[k]; }).join(" ") : "";
++              var flags = entry.flags ? Object.keys(entry.flags).map(function (k) { return k + "=" + entry.flags[k]; }).join(" ") : "";
++              lines.push((i + 1) + ") " + when(entry.at) + " · @" + entry.username + (entry.probe ? " · verificação manual" : "") +
++                " · HTTP " + (null === entry.http || undefined === entry.http ? "-" : entry.http) + (entry.retryAfter ? " · Retry-After=" + entry.retryAfter : "") +
++                " · resultado=" + (entry.outcome || "-") + (entry.profileType ? " · tipo=" + entry.profileType : "") + (keys ? " · " + keys : "") +
++                (flags ? " · " + flags : "") + (entry.email ? " · e-mail=" + entry.email : "") + (entry.message ? " · mensagem=" + entry.message : ""));
++            });
++            var latest = this.contactEvidence.filter(function (entry) { return entry && Array.isArray(entry.userKeys); })[0];
++            if (latest) lines.push("Campos do perfil na última resposta com perfil (@" + latest.username + ", " + latest.userKeys.length + "): " + latest.userKeys.join(", "));
++            return lines.join("\n");
++          },
+         },
+         created: function () {
+           var t = d.a.runtime.getManifest(),
+             e = t.version;
+-          (this.version = "v".concat(e) + " · PATCHED 13 TESTE · Contato comercial"), this.startAfterSavedCooldown();
++          (this.version = "v".concat(e) + " · PATCHED 14 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
+           var self = this;
+           this.$nextTick(function () {
+             var bar = document.createElement('div');
+@@ -3223,8 +3284,12 @@
+               var hot = self.followList.filter(function(u){ return u.isHotLead; }).length;
+               var checked = self.followList.filter(function(u){ return u.detailLoaded; }).length;
+               self.contactStatusNow = Date.now();
++              var counts = {};
++              self.followList.forEach(function (u) { if (u.detailLoaded && u.emailStatus) counts[u.emailStatus] = (counts[u.emailStatus] || 0) + 1; });
+               stat.textContent = self.type === 4
+-                ? total + ' perfis encontrados | ' + checked + ' consultados | ' + self.emailList.length + ' e-mails comerciais'
++                ? total + ' perfis encontrados | ' + checked + ' consultados | ' + self.emailList.length + ' e-mails comerciais | vazios ' + (counts.empty || 0) +
++                  ' · ocultos ' + (counts.hidden || 0) + ' · omitidos ' + (counts.omitted || 0) + ' · pessoais ' + (counts.not_professional || 0) +
++                  ' · indisponíveis ' + ((counts.profile_unavailable || 0) + (counts.identity_mismatch || 0))
+                 : total + ' loaded | ' + hot + ' hot leads';
+             }, 1500);
+           });
+@@ -3242,9 +3307,10 @@
+               self.manualPause = true;
+               self.pauseExtraction();
+             }
+-            return d.a.storage.local.get(["ig_contact_cooldown_until", window.IGCommercialProfileReader.unavailableKey]).then(function (saved) {
++            var reader = window.IGCommercialProfileReader;
++            return d.a.storage.local.get(["ig_contact_cooldown_until", reader.schemaKey, reader.evidenceKey]).then(function (saved) {
+               var until = Number(saved.ig_contact_cooldown_until) || 0;
+-              self.commercialContactUnavailable = commentMode && !!saved[window.IGCommercialProfileReader.unavailableKey];
++              self.applyCommercialEvidence(saved);
+               if (until > +new Date()) {
+                 self.retryAfterUntil = until;
+                 self.resumeStartup = !0;
+@@ -3365,6 +3431,7 @@
+             this.retryAfterUntil = null;
+             this.isPaused = !1;
+             this.commercialStartRequired = false;
++            this.consecutiveUnavailableProfiles = 0;
+             this.autoContinueTimer && clearInterval(this.autoContinueTimer);
+             this.autoContinueTimer = null;
+             try {
+@@ -5274,9 +5341,8 @@
+               throw error;
+             });
+           },
+-          loadUserInfoDetailWebProfile: function (userId, username) {
+-            var t = this, epoch = t.extractionEpoch;
+-            if (!t.commercialProfileReader) t.commercialProfileReader = window.IGCommercialProfileReader.create({
++          ensureCommercialReader: function () {
++            if (!this.commercialProfileReader) this.commercialProfileReader = window.IGCommercialProfileReader.create({
+               contacts: window.IGPublicContacts,
+               storage: d.a.storage.local,
+               locks: navigator.locks,
+@@ -5284,22 +5350,112 @@
+               now: Date.now,
+               wait: function (delay) { return new Promise(function (resolve) { setTimeout(resolve, delay); }); }
+             });
++            return this.commercialProfileReader;
++          },
++          loadUserInfoDetailWebProfile: function (userId, username) {
++            var t = this, epoch = t.extractionEpoch, reader = t.ensureCommercialReader();
+             t.lastProfileRequestStartedAt = Date.now();
+-            return t.commercialProfileReader(userId, username, function () {
++            return reader(userId, username, function () {
+               return !t.isPaused && t.extractionEpoch === epoch;
+             });
+           },
++          applyCommercialEvidence: function (saved) {
++            var reader = window.IGCommercialProfileReader;
++            saved = saved || {};
++            this.contactSchema = reader.readSchema(saved[reader.schemaKey]);
++            this.contactEvidence = Array.isArray(saved[reader.evidenceKey]) ? saved[reader.evidenceKey] : [];
++            this.commercialContactUnavailable = 4 === this.type && reader.unsupported(saved[reader.schemaKey]);
++          },
++          refreshCommercialEvidence: function () {
++            var self = this, reader = window.IGCommercialProfileReader;
++            return d.a.storage.local.get([reader.schemaKey, reader.evidenceKey]).then(function (saved) {
++              self.applyCommercialEvidence(saved);
++            }).catch(function (error) {
++              console.warn("[IG Extractor] Could not read contact diagnostics", error);
++            });
++          },
+           pauseForUnavailableCommercialContact: function () {
++            var schema = this.contactSchema || {}, omitted = (schema.omittedProfessional || []).length;
+             this.commercialContactUnavailable = true;
+             this.manualPause = true;
+             this.pauseExtraction();
+             this.updateHistory();
+             this.$buefy.notification.open({
+               indefinite: true,
+-              message: "O Instagram devolveu o perfil, mas omitiu os campos do e-mail comercial. A fila foi interrompida para evitar consultas que não tragam esse contato. Os perfis coletados estão preservados no histórico.",
++              message: "A consulta web devolveu os perfis, mas omitiu o campo de e-mail comercial em " + omitted + " perfis profissionais, e nenhuma resposta trouxe esse campo. A fila foi interrompida para não gastar consultas sem esse contato. Contas pessoais não contam para esta decisão. Os perfis coletados estão preservados. Para reavaliar, use “Verificar 1 perfil” com um perfil que mostre Contato → E-mail no app.",
+               position: "is-bottom-right", type: "is-warning", hasIcon: true
+             });
+           },
++          commercialStatusMessage: function () {
++            if (this.commercialContactUnavailable) return "Fila bloqueada: a consulta web omitiu o campo de e-mail comercial em perfis profissionais. Verifique 1 perfil com Contato → E-mail visível no app para reavaliar.";
++            if (this.retryAfterUntil > this.contactStatusNow) return "Coleta pausada até " + new Date(this.retryAfterUntil).toLocaleString() + " (limite do Instagram). Nenhuma nova tentativa automática.";
++            if (this.commercialStartRequired) return "Pronto para coletar o e-mail do botão Contato. Nada é consultado antes de Iniciar.";
++            return this.isPaused ? "Coleta pausada. Nenhuma nova tentativa automática." : "Coleta em andamento: 1 perfil por vez, intervalo mínimo de 10 s.";
++          },
++          markCommercialFailure: function (index, userId, error) {
++            var row = this.followList[index];
++            if (!row || row.userId !== userId || row.detailLoaded || !error || error.stopCode === "cancelled") return;
++            this.followList.splice(index, 1, Object.assign({}, row, { contactFailure: {
++              code: error.stopCode || (this.isExtraction429(error) ? "rate_limit" : "request"),
++              status: (error.response && error.response.status) || null,
++              at: Date.now()
++            } }));
++          },
++          saveExtractRows: function () {
++            var key = "extract_list_".concat(this.lastHistoryItem.id), data = {}, index;
++            if (!this.lastHistoryItem.id) return;
++            index = this.localStorageExtractKeys.findIndex(function (item) { return item.key === key; });
++            if (-1 !== index) this.localStorageExtractKeys.splice(index, 1, { key: key, date: h()().valueOf() });
++            else this.localStorageExtractKeys.push({ key: key, date: h()().valueOf() });
++            data[key] = this.lastExtractData.concat(this.userList);
++            data.localStorageExtractKeys = this.localStorageExtractKeys;
++            d.a.storage.local.set(data).catch(function (error) {
++              console.warn("[IG Extractor] Could not save rows", error);
++            });
++          },
++          handleContactProbe: function () {
++            var t = this, username = String(t.contactProbeUsername || "").trim().replace(/^@/, "").toLowerCase();
++            if (t.contactProbeRunning || (!t.isPaused && !t.isComplete) || t.retryAfterUntil > Date.now()) return;
++            if (!/^[a-z0-9_](?:[a-z0-9_.]{0,28}[a-z0-9_])?$/.test(username)) {
++              t.$buefy.toast.open({ message: "Informe um @perfil válido.", type: "is-warning" });
++              return;
++            }
++            t.contactProbeRunning = true;
++            // One manual request through the same lock, spacing, cooldown and evidence log.
++            t.ensureCommercialReader()("", username, null, { probe: true }).then(function (result) {
++              var outcome = result.contactOutcome || "";
++              t.$buefy.notification.open({
++                indefinite: true, position: "is-bottom-right", hasIcon: true,
++                type: "found" === outcome ? "is-success" : "is-warning",
++                message: "Verificação de @" + username + (result.fromCache ? " (resposta já recebida nesta página)" : "") + ": " +
++                  (window.IGPublicContacts.statusText[outcome] || outcome) + ". Detalhes em Copiar diagnóstico."
++              });
++            }).catch(function (error) {
++              if (t.isExtraction429(error)) t.pauseExtractionOn429(error, true);
++              else {
++                if (error && error.cooldownUntil) t.retryAfterUntil = Math.max(t.retryAfterUntil || 0, error.cooldownUntil);
++                t.$buefy.notification.open({
++                  indefinite: true, position: "is-bottom-right", type: "is-warning", hasIcon: true,
++                  message: error && error.commercialRequestStopped ? error.message : "Não foi possível concluir a verificação. Nenhuma nova tentativa automática."
++                });
++              }
++            }).then(function () {
++              t.contactProbeRunning = false;
++              return t.refreshCommercialEvidence();
++            });
++          },
++          handleCopyContactDiagnostic: function () {
++            var t = this, text = t.contactDiagnosticText;
++            var done = function () { t.$buefy.toast.open({ message: "Diagnóstico copiado.", type: "is-success" }); };
++            var fallback = function () {
++              var area = t.$el.querySelector("textarea.contact-diagnostic");
++              if (!area) return;
++              area.focus();
++              area.select();
++              try { if (document.execCommand("copy")) done(); } catch (error) { console.warn("[IG Extractor] Copy failed", error); }
++            };
++            try { navigator.clipboard.writeText(text).then(done, fallback); } catch (error) { fallback(); }
++          },
+           loadUserInfoDetail: function () {
+             var t = this, extractionCycle = t.beginExtractionCycle("detail");
+             if (!extractionCycle) return Promise.resolve();
+@@ -5502,6 +5658,32 @@
+                                               switch ((e.prev = e.next)) {
+                                                 case 0:
+                                                   if (!t.isExtractionCycleCurrent(extractionCycle) || !t.followList[detailUserIndex] || t.followList[detailUserIndex].userId !== detailUserId) return e.abrupt("return");
++                                                  if (4 === t.type && s && s.contactSkip) {
++                                                    // Keep the commenter's own data; nothing from another profile is applied.
++                                                    t.followList.splice(detailUserIndex, 1, Object.assign({}, t.followList[detailUserIndex], {
++                                                      email: "", emailStatus: s.contactOutcome, emailSource: "", emailKind: "",
++                                                      contactParserVersion: 14, contactEndpoint: s.contactEndpoint || "",
++                                                      contactFailure: null, contactCheckedAt: Date.now(), detailLoaded: !0
++                                                    }));
++                                                    extractionCycle.processedIndex = detailUserIndex;
++                                                    t.saveExtractRows();
++                                                    t.refreshCommercialEvidence();
++                                                    t.consecutiveUnavailableProfiles = (t.consecutiveUnavailableProfiles || 0) + 1;
++                                                    if (t.consecutiveUnavailableProfiles >= 3) {
++                                                      t.loadUserIndex = detailUserIndex + 1;
++                                                      t.manualPause = !0;
++                                                      t.pauseExtraction();
++                                                      t.updateHistory();
++                                                      t.$buefy.notification.open({
++                                                        indefinite: !0, position: "is-bottom-right", type: "is-warning", hasIcon: !0,
++                                                        message: "Três perfis seguidos vieram indisponíveis ou divergentes. A fila foi pausada para você conferir a sessão no instagram.com; depois clique em Continue. Nenhuma nova tentativa automática."
++                                                      });
++                                                      return e.abrupt("return");
++                                                    }
++                                                    e.next = 37;
++                                                    break;
++                                                  }
++                                                  if (4 === t.type) t.consecutiveUnavailableProfiles = 0;
+                                                   if (
+                                                     ((a = v()(
+                                                       s,
+@@ -5612,9 +5794,12 @@
+                                                       phoneSource: contacts.phoneSource,
+                                                       emailStatus: contacts.emailStatus,
+                                                       phoneStatus: contacts.phoneStatus,
+-                                                      contactParserVersion: 13,
++                                                      contactParserVersion: 14,
+                                                       contactEndpoint: s.contactEndpoint || "",
+                                                       emailKind: contacts.emailKind || "",
++                                                      contactProfileType: contacts.profileType || "",
++                                                      contactFailure: null,
++                                                      contactCheckedAt: Date.now(),
+                                                       city: n[10] || "",
+                                                       address: n[11] || "",
+                                                       isPrivate: n[12]
+@@ -5685,9 +5870,15 @@
+                                                   } catch (D) {
+                                                     console.log(D);
+                                                   }
+-                                                  if (4 === t.type && s.commercialContactFieldReturned === false) {
+-                                                    t.pauseForUnavailableCommercialContact();
+-                                                    return e.abrupt("return");
++                                                  if (4 === t.type) {
++                                                    t.refreshCommercialEvidence();
++                                                    // Only repeated professional omissions block the route (see reader).
++                                                    if (s.commercialSchemaUnsupported === true) {
++                                                      t.loadUserIndex = detailUserIndex + 1;
++                                                      t.contactSchema = s.commercialSchema || t.contactSchema;
++                                                      t.pauseForUnavailableCommercialContact();
++                                                      return e.abrupt("return");
++                                                    }
+                                                   }
+                                                   // Email comes exclusively from the published Instagram contact fields.
+                                                   if (t.subscription.isPro) {
+@@ -5824,6 +6015,8 @@
+                                     return;
+                                   }
+                                   if (4 === t.type) {
++                                    t.markCommercialFailure(detailUserIndex, detailUserId, e);
++                                    t.refreshCommercialEvidence();
+                                     if (t.isExtraction429(e)) t.pauseExtractionOn429(e, true);
+                                     else {
+                                       if (e.stopCode === "unsupported") t.commercialContactUnavailable = true;
+@@ -6734,6 +6927,9 @@
+               this.manualPause = !0;
+               this.pauseExtraction();
+               this.updateHistory();
++            } else if (4 === this.type && (this.commercialContactUnavailable || this.retryAfterUntil > Date.now())) {
++              // Explain the block instead of silently ignoring repeated clicks.
++              this.$buefy.toast.open({ message: this.commercialStatusMessage(), type: "is-warning", duration: 6e3 });
+             } else this.resumeExtraction();
+           },
+           autoContinue: function () {
+diff -u a/manifest.json b/manifest.json
+--- a/manifest.json	2026-10-02 22:15:46.117885371 +0000
++++ b/manifest.json	2026-10-02 22:15:46.119767340 +0000
+@@ -78,5 +78,5 @@
+          ]
+       }
+    ],
+-   "version_name": "2.5.1 PATCHED 13 TESTE - Consulta de contato comercial"
++   "version_name": "2.5.1 PATCHED 14 - Contato comercial com diagnostico"
+ }
+diff -u a/public-contact-parser.js b/public-contact-parser.js
+--- a/public-contact-parser.js	2026-10-02 22:15:46.108485973 +0000
++++ b/public-contact-parser.js	2026-10-02 22:15:46.110555387 +0000
+@@ -1,5 +1,7 @@
+-/* PATCHED 12: email is exclusively the published Instagram commercial contact.
+- * No network calls, login/recovery fields, viewer traversal, or inferred contacts.
++/* PATCHED 14: email is exclusively the published Instagram commercial contact.
++ * Each profile is classified as found, empty, hidden, omitted or personal
++ * account, kept apart from access failures. No network calls, login/recovery
++ * fields, viewer traversal, inferred contacts, or bio/link fallback for email.
+  */
+ (function (root, factory) {
+   var api = factory();
+@@ -8,9 +10,36 @@
+ })(typeof window !== "undefined" ? window : globalThis, function () {
+   "use strict";
+   var own = Object.prototype.hasOwnProperty;
++  // Top-level fields only: no live response has shown a nested contact block.
+   var emailFields = ["public_email", "business_email"];
++  // PATCHED 10-13 block names remain readable for phones and saved rows only.
+   var contactBlocks = ["professional_contact_info", "professional_metadata", "public_contact_info", "business_contact_info"];
+   var phoneFields = ["contact_phone_number", "public_phone_number", "business_phone_number"];
++  var statusText = {
++    found: "Contato público do Instagram",
++    empty: "Campo comercial vazio",
++    hidden: "Contato oculto pelo perfil",
++    omitted: "Campo omitido pela consulta",
++    not_professional: "Conta pessoal (sem botão Contato)",
++    invalid: "Formato de e-mail inválido",
++    profile_unavailable: "Perfil indisponível",
++    identity_mismatch: "Perfil divergente (dados não aplicados)",
++    // Statuses saved by PATCHED 12-13 rows.
++    not_published: "Sem e-mail comercial publicado",
++    not_returned: "Não retornado pelo Instagram",
++    source_not_verified: "Contato comercial não verificado"
++  };
++  var failureTexts = {
++    rate_limit: "Falha de acesso: limite do Instagram (HTTP 429)",
++    cooldown: "Aguardando o fim da pausa do Instagram",
++    redirect: "Falha de acesso: redirecionamento (login ou verificação)",
++    access: "Falha de acesso",
++    network: "Falha de acesso: rede ou tempo esgotado",
++    invalid_response: "Falha de acesso: resposta não JSON",
++    unexpected_response: "Falha de acesso: resposta em formato desconhecido",
++    unsupported: "Consulta sem campo comercial (fila parada)",
++    request: "Falha ao processar a consulta"
++  };
+ 
+   function text(value) {
+     return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+@@ -29,6 +58,44 @@
+   }
+   function hidden(value) { return value === false || value === 0 || value === "false" || value === "0"; }
+   function published(value) { return value === true || value === 1 || value === "true" || value === "1"; }
++  function profileType(user) {
++    if (!user || typeof user !== "object") return "unknown";
++    var accountType = Number(user.account_type);
++    if (accountType === 2 || published(user.is_business_account) || published(user.is_business)) return "business";
++    if (accountType === 3) return "creator";
++    if (published(user.is_professional_account)) return hidden(user.is_business_account) ? "creator" : "professional";
++    if (accountType === 1 || hidden(user.is_professional_account)) return "personal";
++    return "unknown";
++  }
++  // absent = key not returned; null/empty = returned without a value.
++  function fieldState(user, field) {
++    if (!own.call(user, field)) return "absent";
++    var value = user[field];
++    if (value === null || value === undefined) return "null";
++    if (value === false || (typeof value === "string" && !value.trim())) return "empty";
++    if (typeof value !== "string" && typeof value !== "number") return "invalid";
++    return validEmail(value) ? "valid" : "invalid";
++  }
++  function classifyEmail(user) {
++    user = user && typeof user === "object" ? user : {};
++    var keys = {}, returned = false, invalid = false, email = "", source = "";
++    emailFields.forEach(function (field) {
++      var state = keys[field] = fieldState(user, field);
++      if (state !== "absent") returned = true;
++      if (state === "invalid") invalid = true;
++      if (state === "valid" && !email) { email = validEmail(user[field]); source = field; }
++    });
++    var type = profileType(user), status;
++    // Personal accounts have no Contact button; a hidden flag wins over any value.
++    if (type === "personal") status = "not_professional";
++    else if (hidden(user.should_show_public_contacts)) status = "hidden";
++    else if (email) status = "found";
++    else if (invalid) status = "invalid";
++    else if (returned) status = "empty";
++    else status = "omitted";
++    return { status: status, email: status === "found" ? email : "", source: status === "found" ? source : "",
++      profileType: type, fieldReturned: returned, keys: keys };
++  }
+   function commercialEmail(row) {
+     if (!row || typeof row !== "object") return "";
+     // Old bio/site results and unmarked legacy rows must not become button emails.
+@@ -38,13 +105,18 @@
+     });
+     return trusted && (row.emailKind === "commercial_contact" || Number(row.contactParserVersion) >= 10) ? validEmail(row.email) : "";
+   }
++  function failureText(failure) {
++    if (!failure || typeof failure !== "object") return "";
++    var message = failureTexts[failure.code] || failureTexts.access;
++    if (failure.code === "access" && failure.status) message += " (HTTP " + failure.status + ")";
++    return message;
++  }
+   function emailStatusText(row) {
+-    if (commercialEmail(row)) return "Contato público do Instagram";
+-    if (row && row.loaded && row.detailLoaded === false) return "Aguardando consulta";
+-    if (row && (row.emailStatus === "source_not_verified" || (row.email && !commercialEmail(row)))) return "Contato comercial não verificado";
+-    if (row && row.emailStatus === "not_published") return "Sem e-mail comercial publicado";
+-    if (row && row.emailStatus === "invalid") return "Formato de e-mail inválido";
+-    return "Não retornado pelo Instagram";
++    if (commercialEmail(row)) return statusText.found;
++    if (row && row.loaded && row.detailLoaded === false) return failureText(row.contactFailure) || "Aguardando consulta";
++    if (row && (row.emailStatus === "source_not_verified" || (row.email && !commercialEmail(row)))) return statusText.source_not_verified;
++    var status = row && row.emailStatus;
++    return status && status !== "found" && own.call(statusText, status) ? statusText[status] : statusText.not_returned;
+   }
+   function commercialRow(row) {
+     var copy = Object.assign({}, row), email = commercialEmail(row);
+@@ -89,7 +161,7 @@
+       if (/[\w@/#]/.test(previous) || /[\w@/]/.test(after)) continue;
+       if (/(?:\b(?:CRM|RQE|CNPJ|CPF|CEP|registro|licen[çc]a|nasc(?:imento)?|born|desde|since|posts?|followers?|seguidores?)\b)[^\n\d]{0,18}$/i.test(before)) continue;
+       var digits = match[0].replace(/\D/g, "");
+-      var labeled = /(?:whats(?:app)?|wpp|telefone|fone|tel\.?|phone|contato|contact|booking|reservas?|\u260e|\ud83d\udcde)[^\n\d]{0,18}$/i.test(before);
++      var labeled = /(?:whats(?:app)?|wpp|telefone|fone|tel\.?|phone|contato|contact|booking|reservas?|☎|📞)[^\n\d]{0,18}$/i.test(before);
+       var international = match[0].charAt(0) === "+";
+       var areaCode = /^\d{2,3}\)\s*\d/.test(match[0]) && previous === "(";
+       var formatted = /^\d{2,3}[ \t.-]+\d{4,5}[ \t.-]+\d{4}$/.test(match[0]);
+@@ -137,17 +209,12 @@
+   function extract(user) {
+     user = user && typeof user === "object" ? user : {};
+     var bio = text(user.biography) || text(at(user, "biography_with_entities.raw_text"));
++    var contact = classifyEmail(user);
+     var visible = !hidden(user.should_show_public_contacts);
+-    var result = { email: "", phone: "", emailSource: "", phoneSource: "", biography: bio,
+-      emailStatus: "not_returned", phoneStatus: "not_returned" };
+-    if (!visible) result.emailStatus = result.phoneStatus = "not_published";
++    var result = { email: contact.email, phone: "", emailSource: contact.source, phoneSource: "", biography: bio,
++      emailStatus: contact.status, phoneStatus: visible ? "not_returned" : "not_published",
++      profileType: contact.profileType, emailFieldReturned: contact.fieldReturned, emailKeys: contact.keys };
+     if (visible) {
+-      emailFields.forEach(function (field) {
+-        if (own.call(user, field)) result.emailStatus = "not_published";
+-        var value = validEmail(user[field]);
+-        if (text(user[field]) && !value) result.emailStatus = "invalid";
+-        if (!result.email && value) { result.email = value; result.emailSource = field; }
+-      });
+       phoneFields.forEach(function (field) {
+         if (own.call(user, field)) result.phoneStatus = "not_published";
+         var value = validPhone(user[field], user.public_phone_country_code);
+@@ -156,18 +223,9 @@
+       contactBlocks.forEach(function (key) {
+         var info = user[key];
+         if (!info || typeof info !== "object" || Array.isArray(info)) return;
+-        if (hidden(info.is_public) || hidden(info.should_show_public_contacts)) { if (!result.email) result.emailStatus = "not_published"; return; }
+-        // Generic email/phone_number are accepted only with explicit publication.
++        if (hidden(info.is_public) || hidden(info.should_show_public_contacts)) return;
++        // Generic phone_number is accepted only with explicit publication.
+         var markedPublic = key === "public_contact_info" || published(info.is_public) || published(info.should_show_public_contacts) || published(user.should_show_public_contacts);
+-        var fields = emailFields.concat(markedPublic ? ["email"] : []);
+-        fields.forEach(function (field) {
+-          if (!own.call(info, field)) return;
+-          var email = validEmail(info[field]);
+-          if (!result.email) {
+-            result.emailStatus = text(info[field]) && !email ? "invalid" : "not_published";
+-            if (email) { result.email = email; result.emailSource = key + "." + field; }
+-          }
+-        });
+         var phone = validPhone(info.contact_phone_number || info.public_phone_number || info.business_phone_number || (markedPublic ? info.phone_number : ""), info.country_code || user.public_phone_country_code);
+         if (!result.phone && phone) { result.phone = phone; result.phoneSource = key; }
+       });
+@@ -184,7 +242,7 @@
+       var contacts = linkContacts(link);
+       if (!result.phone && contacts.phone) { result.phone = contacts.phone; result.phoneSource = "profile_link"; }
+     });
+-    if (result.email) { result.emailStatus = "found"; result.emailKind = "commercial_contact"; }
++    if (result.email) result.emailKind = "commercial_contact";
+     if (result.phone) result.phoneStatus = "found";
+     return result;
+   }
+@@ -213,7 +271,9 @@
+       external_url: text(user.external_url) || text(user.external_url_linkshimmed), biography: contacts.biography
+     } }, publicContactResult: contacts };
+   }
+-  return { extract: extract, profileFromResponse: profileFromResponse, toDetailResponse: toDetailResponse,
++  return { extract: extract, classifyEmail: classifyEmail, profileType: profileType, emailFields: emailFields.slice(),
++    profileFromResponse: profileFromResponse, toDetailResponse: toDetailResponse,
+     validEmail: validEmail, validPhone: validPhone, emailInText: emailInText, phoneInText: phoneInText, linkContacts: linkContacts,
+-    commercialEmail: commercialEmail, commercialRow: commercialRow, emailStatusText: emailStatusText };
++    commercialEmail: commercialEmail, commercialRow: commercialRow, emailStatusText: emailStatusText,
++    failureText: failureText, statusText: statusText };
+ });
