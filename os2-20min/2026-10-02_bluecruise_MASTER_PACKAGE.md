@@ -508,7 +508,7 @@ Os tempos são exatos a 140 WPM, calculados palavra por palavra.
 [EVIDENCE TAG] [PRIMARY FACT]
 
 **[15:27]**
-[NARRATION] Even the car's automatic emergency call didn't get through. In Philadelphia, Ford's 911 Assist, which relies on the driver's paired phone, started dialing about two seconds after the crash. After several attempts over about seven minutes, the call was marked complete, but Pennsylvania State Police had no record of receiving it. Troopers learned about the crash from witnesses. NTSB found the emergency response itself was timely.
+[NARRATION] Even the car's automatic emergency call didn't get through. In Philadelphia, Ford's 911 Assist, which relies on the driver's cell phone, started dialing about two seconds after the crash. After several attempts over about seven minutes, the call was marked complete, but Pennsylvania State Police had no record of receiving it. Troopers learned about the crash from witnesses. NTSB found the emergency response itself was timely.
 [VISUAL] A dark dashboard after a stop: an overhead console emergency-call button glowing, a phone screen showing CALLING... then CALL ENDED, a dispatch center wall with an empty incoming-call board.
 [EVIDENCE TAG] [PRIMARY FACT]
 
