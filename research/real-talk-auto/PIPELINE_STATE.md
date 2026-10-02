@@ -1,6 +1,6 @@
 # Real Talk Auto — Pipeline State
 
-Última atualização: 2026-10-01
+Última atualização: 2026-10-02
 
 ## Fonte de verdade
 - Canal: Real Talk Auto — `UCsevpZpQnMV2_iDsFfdcouQ` (conectado via vidIQ)
@@ -22,6 +22,7 @@ Amostra muito pequena: nenhum dado de retenção do canal é estatisticamente co
 ## Catálogo publicado (zonas de exclusão para duplicação)
 | Data | Vídeo | Tema/zona |
 |---|---|---|
+| (em produção) | Ford BlueCruise / NTSB (20 min) | ADAS Nível 2 / NTSB / monitoramento do motorista — NÃO repetir |
 | 10-01 | Why Your SUV Is Legally A Truck | CAFE / classificação SUV / regulação NHTSA |
 | 10-01 | GM brake part (EA26006) | GM eBoost / investigação NHTSA sem recall |
 | 09-30 | Jeep Grand Cherokee recall: first fix wasn't enough | Recall que falhou / molas |
@@ -60,6 +61,16 @@ Amostra muito pequena: nenhum dado de retenção do canal é estatisticamente co
     - Se possível, confirmar nos documentos da NHTSA de abr/2026 os 4 itens que só têm fonte NTD
     - Re-timing dos capítulos após a narração
     - Definir antes da publicação o critério de sucesso do experimento
+
+- 20-MIN DOCUMENTARY — "Ford's Hands-Free BlueCruise Didn't Brake. Investigators Found Out Why" (2026-10-02)
+  - Seleção: 13 candidatos. Vencedor: NTSB × Ford BlueCruise (categoria 5, genuinamente nova)
+  - Por que venceu: única candidata com fonte primária completa acessível (reunião do NTSB de 31/03/2026, vídeo de 3h44, transcrição inteira lida)
+  - Rejeitados: maçanetas eletrônicas (fonte primária bloqueada + Bloomberg ~930k); dados vendidos a seguradoras (saturado em 2026); comma.ai PE26007 (fontes fracas e contraditórias, reavaliar)
+  - Pacote completo: `/os2-20min/2026-10-02_bluecruise_MASTER_PACKAGE.md` (20 seções)
+  - Roteiro: `/os2-20min/scripts/2026-10-02_bluecruise_SCRIPT.md`. VO limpo: `2026-10-02_bluecruise_VO_PLAIN.txt`
+    - 2.956 palavras = 21:06 a 140 WPM / 19:42 a 150 WPM
+  - Fontes salvas: `/os2-20min/data/sources/` (NTSB, Ford How-To, Autoline, TechCrunch via reprodução)
+  - Pendências: sincronizar capítulos após a narração; checar se a investigação da NHTSA (EA25-001) foi encerrada antes de publicar
 
 ## Limitações conhecidas do ambiente
 - A política de egress responde 403 para nhtsa.gov, static/api.nhtsa.gov, federalregister.gov, govinfo.gov, regulations.gov, web.archive.org e sites de notícias. Só pypi.org e github.com respondem. O README do proxy proíbe contornar.
