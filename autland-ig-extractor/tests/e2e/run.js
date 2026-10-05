@@ -566,6 +566,7 @@ function assess(label, r) {
     check(scn, 'após recarregar: pausa ativa e Iniciar desabilitado', r.afterReload.retryAfterUntil >= until - 1000 && r.startEnabledAfterReload === false, { retryAfterUntil: r.afterReload.retryAfterUntil, enabled: r.startEnabledAfterReload });
     check(scn, 'aviso de HTTP 429 exibido', s.notifications.some((n) => /429/.test(n)));
     if (label !== 'v13') check(scn, 'linha marcada com falha de acesso 429 (não como e-mail ausente)', s.rows[0] && s.rows[0].failure && s.rows[0].failure.code === 'rate_limit' && /429/.test(s.rows[0].text), s.rows[0]);
+    if (label !== 'v13') check(scn, 'contador mostra encontrados x consultados (2 encontrados, 0 consultados)', /Pausado\.\s*2\s*perfis encontrados, 0 consultados/.test(s.bodyText), (s.bodyText.match(/Pausado\.[^\n]{0,60}/) || [''])[0]);
   }
   if (/omitidos_profissionais/.test(scn)) {
     console.log('--- diagnóstico copiado (simulado) ---\n' + r.diag + '\n---');

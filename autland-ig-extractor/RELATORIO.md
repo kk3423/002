@@ -1,4 +1,4 @@
-# Autland IG Extractor — PATCHED 15 — Relatório
+# Autland IG Extractor — PATCHED 15.1 — Relatório
 
 ## Resultado
 
@@ -6,9 +6,27 @@
 |---|---|
 | Modos Seguidores, Seguindo, Hashtag, Curtidas, Local e Lista | Corrigidos e validados de ponta a ponta, com respostas **simuladas** |
 | Histórico, retomada e exportações (todos os modos) | Corrigidos e validados, com respostas **simuladas** |
-| Modo Comment: e-mail do botão Contato → E-mail | **Não comprovado.** Não houve nenhuma consulta real ao Instagram |
+| Modo Comment: e-mail do botão Contato → E-mail | **Não comprovado.** No seu teste real, o Instagram bloqueou a 1ª consulta (HTTP 429) |
 
 Para usar, basta instalar. As instruções estão no `LEIA-ME.txt`, dentro do ZIP.
+
+## Teste real (feito por você em 05/10/2026, 12:59)
+
+| Etapa | Resultado real |
+|---|---|
+| Lista de comentários (post com 733 comentários) | Carregou: 47 perfis na 1ª página |
+| 1ª consulta de perfil (`web_profile_info`, @djrolandgonzales) | **HTTP 429** (limite do Instagram), sem Retry-After |
+| Reação da extensão | Pausa até 13:59:23 (60 min), linha marcada como falha de acesso, nenhuma repetição |
+| E-mail comercial | Nenhum: a consulta foi recusada antes de devolver o perfil |
+
+É o mesmo resultado da versão 13. A rota permitida no modo Comment está sendo
+recusada para a sua conta já na primeira chamada. Com as regras atuais (sem
+`/users/{id}/info/` no Comment e sem contornar limites), não existe outra rota
+permitida para esse e-mail.
+
+A versão 15.1 só corrige o contador da tela, que mostrava "0 perfis
+encontrados" com 47 listados. Agora mostra "47 perfis encontrados, 0
+consultados".
 
 ## O que foi corrigido nesta versão
 
@@ -42,8 +60,8 @@ As regras de 429 foram preservadas sem nenhuma mudança:
 | Sintaxe (12 arquivos JS, manifest e traduções) | n/a | OK |
 | Unitários do parser e do leitor | Simulado | 41/41 |
 | Dados, histórico e exportação (código real do dashboard e do popup em Node) | Simulado | 12/12 (no PATCHED 14: 10 dos 12 falham, reproduzindo os defeitos) |
-| Ponta a ponta: dashboard real no Chromium, todos os modos, 27 cenários | Simulado (toda a rede interceptada) | 322/322 verificações |
-| Consulta ao Instagram | **Real** | **Nenhuma.** A rede do ambiente bloqueia o instagram.com e não há sessão sua aqui |
+| Ponta a ponta: dashboard real no Chromium, todos os modos, 27 cenários | Simulado (toda a rede interceptada) | 322/322 no PATCHED 15; 65/65 no reteste do 15.1 (4 cenários do Comment) |
+| Consulta ao Instagram, feita por você | **Real** | Lista de comentários OK; 1ª consulta de perfil: **HTTP 429**. Pausa respeitada, nada repetido |
 
 O detalhe de cada verificação está em `RESULTADOS-TESTES.txt`. Os testes ficam em `tests/` e podem ser rodados de novo.
 
@@ -71,7 +89,7 @@ registra tudo nas abas de diagnóstico do XLSX.
 
 | Arquivo | Conteúdo |
 |---|---|
-| `Autland-IG-Extractor-PATCHED-15.zip` | Extensão completa (34 arquivos), com `LEIA-ME.txt` e `PATCH_NOTES.txt` |
+| `Autland-IG-Extractor-PATCHED-15.1.zip` | Extensão completa (34 arquivos), com `LEIA-ME.txt` e `PATCH_NOTES.txt` |
 | `RESULTADOS-TESTES.txt` | Saída completa das três baterias |
-| `diffs/` | Diferenças 13→14 e 14→15 |
+| `diffs/` | Diferenças 13→14 e 14→15.1 |
 | `tests/` | Testes unitários, de dados e ponta a ponta, com instruções |

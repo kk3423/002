@@ -451,4 +451,86 @@ TOTAL: 322 verificações OK / 0 falhas, em 27 cenários
 ==============================================================================
 5. CONSULTA REAL AO INSTAGRAM
 ==============================================================================
-Nenhuma. A coleta do e-mail do botão Contato no modo Comment continua NÃO comprovada.
+Nenhuma feita por este ambiente. Teste real do usuário: seção 7. A coleta do e-mail do botão Contato no modo Comment continua NÃO comprovada.
+
+==============================================================================
+6. PATCHED 15.1 — reteste depois da correção do contador do modo Comment
+   ZIP: 9f98e07b53d419aafd88127378f8a1effe3f8edf962118736d4a1c2cd6a968ac  Autland-IG-Extractor-PATCHED-15.1.zip
+   (simulado; o código muda só no texto do contador e no rótulo de versão)
+==============================================================================
+Unitários: 41/41
+Dados, histórico e exportação: 12/12
+Ponta a ponta (primeiro_429:300, tipos_mistos, retomada_comment, export_vazio):
+PASS  v15:tipos_mistos  não inicia sozinho
+PASS  v15:export_vazio  nenhuma chamada a /users/{id}/info/
+PASS  v15:export_vazio  nenhum host externo não simulado
+PASS  v15:export_vazio  intervalo >= 10 s entre consultas de perfil
+PASS  v15:export_vazio  X-IG-App-ID web padrão, sem troca de host
+PASS  v15:export_vazio  sem erro JavaScript na página
+PASS  v15:export_vazio  linhas carregadas sem nenhuma consulta de perfil concluída
+PASS  v15:export_vazio  XLSX com as 3 abas mesmo sem diagnóstico
+PASS  v15:export_vazio  aba de diagnóstico lista os 2 perfis com "-" nos campos
+PASS  v15:export_vazio  status mostra aguardando consulta
+PASS  v15:export_vazio  aba de respostas reais diz que não há prova
+PASS  v15:export_vazio  CSV exporta as 2 linhas
+PASS  v15:export_vazio  sem erro de página após exportar
+PASS  v15:primeiro_429  nenhuma chamada a /users/{id}/info/
+PASS  v15:primeiro_429  nenhum host externo não simulado
+PASS  v15:primeiro_429  intervalo >= 10 s entre consultas de perfil
+PASS  v15:primeiro_429  X-IG-App-ID web padrão, sem troca de host
+PASS  v15:primeiro_429  sem erro JavaScript na página
+PASS  v15:primeiro_429  apenas 1 consulta e nenhuma repetição automática
+PASS  v15:primeiro_429  pausa persistida conforme Retry-After/60 min
+PASS  v15:primeiro_429  após recarregar: pausa ativa e Iniciar desabilitado
+PASS  v15:primeiro_429  aviso de HTTP 429 exibido
+PASS  v15:primeiro_429  linha marcada com falha de acesso 429 (não como e-mail ausente)
+PASS  v15:primeiro_429  contador mostra encontrados x consultados (2 encontrados, 0 consultados)
+PASS  v15:retomada_comment  nenhuma chamada a /users/{id}/info/
+PASS  v15:retomada_comment  nenhum host externo não simulado
+PASS  v15:retomada_comment  intervalo >= 10 s entre consultas de perfil
+PASS  v15:retomada_comment  X-IG-App-ID web padrão, sem troca de host
+PASS  v15:retomada_comment  sem erro JavaScript na página
+PASS  v15:retomada_comment  sessão 1: 1 perfil consultado, 429 no 2º, pausa
+PASS  v15:retomada_comment  histórico da sessão 1 conta só o perfil consultado (1), não os 3 listados
+PASS  v15:retomada_comment  Iniciar habilitado depois da pausa
+PASS  v15:retomada_comment  sessão 2 consulta só os pendentes (sem repetir ret_um)
+PASS  v15:retomada_comment  retomada conclui a tarefa
+PASS  v15:retomada_comment  histórico local com os 3 perfis, sem duplicar
+PASS  v15:retomada_comment  e-mails dos 3 perfis preservados no histórico
+PASS  v15:tipos_mistos  nenhuma chamada a /users/{id}/info/
+PASS  v15:tipos_mistos  nenhum host externo não simulado
+PASS  v15:tipos_mistos  intervalo >= 10 s entre consultas de perfil
+PASS  v15:tipos_mistos  X-IG-App-ID web padrão, sem troca de host
+PASS  v15:tipos_mistos  sem erro JavaScript na página
+PASS  v15:tipos_mistos  status pessoal_sem_campo = not_professional
+PASS  v15:tipos_mistos  status loja_com_email = found
+PASS  v15:tipos_mistos  status criador_nulo = empty
+PASS  v15:tipos_mistos  status loja_oculta = hidden
+PASS  v15:tipos_mistos  status loja_vazia = empty
+PASS  v15:tipos_mistos  status conta_apagada = profile_unavailable
+PASS  v15:tipos_mistos  status pessoal_nulo = not_professional
+PASS  v15:tipos_mistos  fila não parou por perfil pessoal/omitido
+PASS  v15:tipos_mistos  cada perfil consultado uma única vez
+PASS  v15:tipos_mistos  único e-mail = campo comercial (bio ignorada)
+PASS  v15:tipos_mistos  e-mail oculto não coletado
+PASS  v15:tipos_mistos  textos distintos: vazio/oculto/pessoal/indisponível/encontrado
+PASS  v15:tipos_mistos  sem método de contato anunciado, nada é rotulado como retido
+PASS  v15:tipos_mistos  perfil apagado preserva nome do comentário
+PASS  v15:tipos_mistos  CSV de e-mails: coluna "E-mail comercial" só com o contato comercial
+PASS  v15:tipos_mistos  CSV completo: coluna de e-mail sem bio/oculto/pessoal
+PASS  v15:tipos_mistos  CSV completo tem 7 linhas e coluna de status
+PASS  v15:tipos_mistos  XLSX: aba de dados + 2 abas de diagnóstico automáticas
+PASS  v15:tipos_mistos  XLSX diagnóstico: campo omitido x nulo x vazio por perfil
+PASS  v15:tipos_mistos  XLSX diagnóstico: sinal de contato oculto registrado
+PASS  v15:tipos_mistos  XLSX diagnóstico: sem e-mail completo nas abas de diagnóstico
+PASS  v15:tipos_mistos  XLSX dados: coluna E-mail comercial só com o contato do campo
+PASS  v15:tipos_mistos  histórico local salvo (extract_list_*)
+PASS  v15:tipos_mistos  evidência sanitizada registrada (sem e-mail completo)
+TOTAL: 65 verificações OK / 0 falhas
+
+==============================================================================
+7. TESTE REAL (feito pelo usuário em 05/10/2026, 12:59, PATCHED 15)
+==============================================================================
+Lista de comentários: carregou (47 perfis na 1ª página de um post com 733 comentários).
+1ª consulta web_profile_info: HTTP 429, sem Retry-After. Pausa até 13:59:23. Nada repetido.
+E-mail comercial público: NÃO comprovado.

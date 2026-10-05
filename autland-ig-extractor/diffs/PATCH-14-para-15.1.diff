@@ -1,9 +1,9 @@
-diff -ruN PATCHED-14/LEIA-ME.txt PATCHED-15/LEIA-ME.txt
+diff -ruN PATCHED-14/LEIA-ME.txt PATCHED-15.1/LEIA-ME.txt
 --- PATCHED-14/LEIA-ME.txt	2026-10-05 03:04:00.547310039 +0000
-+++ PATCHED-15/LEIA-ME.txt	2026-10-05 09:47:40.000000000 +0000
++++ PATCHED-15.1/LEIA-ME.txt	2026-10-05 16:03:42.000000000 +0000
 @@ -1,74 +1,81 @@
 -Autland IG Extractor — PATCHED 14 — Contato comercial com diagnóstico
-+Autland IG Extractor — PATCHED 15 — Contato comercial com diagnóstico
++Autland IG Extractor — PATCHED 15.1 — Contato comercial com diagnóstico
  
  SITUAÇÃO (leia antes de instalar)
 -A coleta do e-mail do botão Contato → E-mail AINDA NÃO ESTÁ COMPROVADA.
@@ -13,9 +13,9 @@ diff -ruN PATCHED-14/LEIA-ME.txt PATCHED-15/LEIA-ME.txt
 +- Modos Seguidores, Seguindo, Hashtag, Curtidas, Local e Lista: corrigidos e
 +  testados de ponta a ponta com respostas simuladas.
 +- Modo Comment: a coleta do e-mail do botão Contato → E-mail AINDA NÃO ESTÁ
-+  COMPROVADA. Nenhuma consulta ao Instagram foi possível na preparação desta
-+  versão: o ambiente onde ela foi construída não tem acesso ao instagram.com
-+  nem à sua sessão. Todos os testes usaram respostas simuladas.
++  COMPROVADA. No seu teste real de 05/10/2026 (12:59), a lista de comentários
++  carregou, mas o Instagram respondeu HTTP 429 (limite) já na 1ª consulta de
++  perfil. A extensão pausou por 60 minutos e não repetiu nada.
  
 -O QUE A PESQUISA EM RESPOSTAS REAIS DE TERCEIROS MOSTROU
 +POR QUE O MODO COMMENT CONTINUA SEM PROVA
@@ -147,7 +147,7 @@ diff -ruN PATCHED-14/LEIA-ME.txt PATCHED-15/LEIA-ME.txt
 -   "PATCHED 14 · Contato comercial com diagnóstico".
 -5. Clique em Iniciar. Nada é consultado antes disso.
 +4. Abra uma extração. O cabeçalho deve mostrar
-+   "PATCHED 15 · Contato comercial com diagnóstico".
++   "PATCHED 15.1 · Contato comercial com diagnóstico".
 +5. No modo Comment, clique em Iniciar. Nada é consultado antes disso.
  
 -O QUE VOCÊ VAI VER, E O QUE SIGNIFICA
@@ -165,10 +165,21 @@ diff -ruN PATCHED-14/LEIA-ME.txt PATCHED-15/LEIA-ME.txt
 -  o que é preciso para decidir o próximo passo.
 +- Em qualquer caso, exporte o XLSX: as duas abas de diagnóstico trazem tudo o
 +  que é preciso para decidir o próximo passo.
-diff -ruN PATCHED-14/PATCH_NOTES.txt PATCHED-15/PATCH_NOTES.txt
+diff -ruN PATCHED-14/PATCH_NOTES.txt PATCHED-15.1/PATCH_NOTES.txt
 --- PATCHED-14/PATCH_NOTES.txt	2026-10-05 03:04:04.290546953 +0000
-+++ PATCHED-15/PATCH_NOTES.txt	2026-10-05 10:05:46.000000000 +0000
-@@ -1,3 +1,56 @@
++++ PATCHED-15.1/PATCH_NOTES.txt	2026-10-05 16:03:42.000000000 +0000
+@@ -1,3 +1,67 @@
++PATCHED 15.1 — 05/10/2026
++- Real test by the user (05/10/2026 12:59, Comment mode, post with 733
++  comments): the comment list loaded (47 commenters) and the FIRST
++  web_profile_info request got HTTP 429 without Retry-After. The extension
++  paused until 13:59:23, marked the row as an access failure and repeated
++  nothing. The public commercial email is still not confirmed.
++- The Comment progress line counted checked profiles as "perfis encontrados"
++  and showed "0" while 47 commenters were listed. It now reads
++  "47 perfis encontrados, 0 consultados".
++- The popup shows the full patch level (e.g. "PATCHED 15.1").
++
 +PATCHED 15 — 05/10/2026
 +Stability release for every mode. The Comment-mode route and its limits are
 +unchanged from PATCHED 14: one ordinary web_profile_info request per profile,
@@ -225,9 +236,9 @@ diff -ruN PATCHED-14/PATCH_NOTES.txt PATCHED-15/PATCH_NOTES.txt
  PATCHED 14 — 04/10/2026
  Comment detail enrichment keeps one ordinary web_profile_info request per
  profile. A live public commercial email is still NOT confirmed: no request to
-diff -ruN PATCHED-14/dashboard.js PATCHED-15/dashboard.js
+diff -ruN PATCHED-14/dashboard.js PATCHED-15.1/dashboard.js
 --- PATCHED-14/dashboard.js	2026-10-05 03:21:38.329191090 +0000
-+++ PATCHED-15/dashboard.js	2026-10-05 09:45:58.000000000 +0000
++++ PATCHED-15.1/dashboard.js	2026-10-05 16:01:36.000000000 +0000
 @@ -399,7 +399,7 @@
                                                    staticClass:
                                                      "has-text-primary has-text-weight-semibold mx-1",
@@ -390,15 +401,18 @@ diff -ruN PATCHED-14/dashboard.js PATCHED-15/dashboard.js
                                                            )
                                                          ),
                                                        ]
-@@ -1208,7 +1208,7 @@
+@@ -1208,9 +1208,9 @@
                                              staticClass:
                                                "has-text-primary has-text-weight-semibold mx-1",
                                            },
 -                                          [t._v(t._s(t.userList.length))]
-+                                          [t._v(t._s(t.processedList.length))]
++                                          [t._v(t._s(t.followList.length))]
                                          ),
-                                         t._v(" perfis encontrados"),
+-                                        t._v(" perfis encontrados"),
++                                        t._v(" perfis encontrados, " + t._s(t.processedList.length) + " consultados"),
                                          t.lastScrapedCount > 0
+                                           ? s("span", [
+                                               t._v(
 @@ -1226,7 +1226,7 @@
                                                    t._v(
                                                      t._s(
@@ -408,15 +422,19 @@ diff -ruN PATCHED-14/dashboard.js PATCHED-15/dashboard.js
                                                      )
                                                    ),
                                                  ]
-@@ -1266,7 +1266,7 @@
+@@ -1266,10 +1266,10 @@
                                                    staticClass:
                                                      "has-text-primary has-text-weight-semibold mx-1",
                                                  },
 -                                                [t._v(t._s(t.userList.length))]
-+                                                [t._v(t._s(t.processedList.length))]
++                                                [t._v(t._s(t.followList.length))]
                                                ),
                                                t._v(
-                                                 " perfis encontrados"
+-                                                " perfis encontrados"
++                                                " perfis encontrados, " + t._s(t.processedList.length) + " consultados"
+                                               ),
+                                               t.lastScrapedCount > 0
+                                                 ? s("span", [
 @@ -1286,7 +1286,7 @@
                                                          t._v(
                                                            t._s(
@@ -563,7 +581,7 @@ diff -ruN PATCHED-14/dashboard.js PATCHED-15/dashboard.js
            var t = d.a.runtime.getManifest(),
              e = t.version;
 -          (this.version = "v".concat(e) + " · PATCHED 14 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
-+          (this.version = "v".concat(e) + " · PATCHED 15 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
++          (this.version = "v".concat(e) + " · PATCHED 15.1 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
            var self = this;
            // The panel's cooldown gates need a clock of their own: the DJ bar's
            // ticker can be absent and must not decide when Iniciar re-enables.
@@ -1259,34 +1277,34 @@ diff -ruN PATCHED-14/dashboard.js PATCHED-15/dashboard.js
                                              t.startLoadAllData();
                                          case 10:
                                          case "end":
-diff -ruN PATCHED-14/manifest.json PATCHED-15/manifest.json
+diff -ruN PATCHED-14/manifest.json PATCHED-15.1/manifest.json
 --- PATCHED-14/manifest.json	2026-10-02 22:07:47.210869436 +0000
-+++ PATCHED-15/manifest.json	2026-10-05 09:21:40.000000000 +0000
++++ PATCHED-15.1/manifest.json	2026-10-05 16:01:36.000000000 +0000
 @@ -78,5 +78,5 @@
           ]
        }
     ],
 -   "version_name": "2.5.1 PATCHED 14 - Contato comercial com diagnostico"
-+   "version_name": "2.5.1 PATCHED 15 - Contato comercial com diagnostico"
++   "version_name": "2.5.1 PATCHED 15.1 - Contato comercial com diagnostico"
  }
-diff -ruN PATCHED-14/popup.html PATCHED-15/popup.html
+diff -ruN PATCHED-14/popup.html PATCHED-15.1/popup.html
 --- PATCHED-14/popup.html	2026-10-02 22:02:58.435945426 +0000
-+++ PATCHED-15/popup.html	2026-10-05 09:21:22.000000000 +0000
++++ PATCHED-15.1/popup.html	2026-10-05 09:21:22.000000000 +0000
 @@ -1 +1 @@
 -<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autland IG Extractor</title><link href="/chunk-common.js" rel="preload" as="script"><link href="/chunk-vendors.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="preload" as="style"><link href="/css/popup.4471a0ce.css" rel="preload" as="style"><link href="/popup.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="stylesheet"><link href="/css/popup.4471a0ce.css" rel="stylesheet"></head><body><div id="app"></div><script src="/chunk-vendors.js"></script><script src="/chunk-common.js"></script><script src="/popup.js"></script></body></html>
 \ No newline at end of file
 +<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autland IG Extractor</title><link href="/chunk-common.js" rel="preload" as="script"><link href="/chunk-vendors.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="preload" as="style"><link href="/css/popup.4471a0ce.css" rel="preload" as="style"><link href="/popup.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="stylesheet"><link href="/css/popup.4471a0ce.css" rel="stylesheet"></head><body><div id="app"></div><script src="/chunk-vendors.js"></script><script src="/chunk-common.js"></script><script src="/public-contact-parser.js"></script><script src="/popup.js"></script></body></html>
 \ No newline at end of file
-diff -ruN PATCHED-14/popup.js PATCHED-15/popup.js
+diff -ruN PATCHED-14/popup.js PATCHED-15.1/popup.js
 --- PATCHED-14/popup.js	2026-10-02 22:02:58.436013000 +0000
-+++ PATCHED-15/popup.js	2026-10-05 09:49:34.000000000 +0000
++++ PATCHED-15.1/popup.js	2026-10-05 16:01:36.000000000 +0000
 @@ -3268,7 +3268,8 @@
            var t = this,
              e = c.a.runtime.getManifest(),
              a = e.version;
 -          (this.version = "v".concat(a)),
 +          // Show the patch level too, so an installed update can be confirmed from the popup.
-+          (this.version = "v".concat(a) + (/PATCHED \d+/.test(e.version_name || "") ? " · " + e.version_name.match(/PATCHED \d+/)[0] : "")),
++          (this.version = "v".concat(a) + (/PATCHED [\d.]+/.test(e.version_name || "") ? " · " + e.version_name.match(/PATCHED [\d.]+/)[0] : "")),
              this.initData(),
              c.a.storage.onChanged.addListener(
                (function () {
