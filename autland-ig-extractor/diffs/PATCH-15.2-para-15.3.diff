@@ -1,0 +1,789 @@
+--- 15.2/manifest.json
++++ 15.3/manifest.json
+@@ -78,5 +78,5 @@
+          ]
+       }
+    ],
+-   "version_name": "2.5.1 PATCHED 15.2 - Contato comercial com diagnostico"
++   "version_name": "2.5.1 PATCHED 15.3 - Diagnostico do contato comercial"
+ }
+--- 15.2/public-contact-parser.js
++++ 15.3/public-contact-parser.js
+@@ -1,4 +1,4 @@
+-/* PATCHED 14: email is exclusively the published Instagram commercial contact.
++/* PATCHED 14-15.3: email is exclusively the published Instagram commercial contact.
+  * Each profile is classified as found, empty, hidden, omitted or personal
+  * account, kept apart from access failures. No network calls, login/recovery
+  * fields, viewer traversal, inferred contacts, or bio/link fallback for email.
+@@ -18,7 +18,9 @@
+   var statusText = {
+     found: "Contato público do Instagram",
+     empty: "Campo comercial vazio",
+-    not_delivered: "E-mail não entregue pela consulta web (perfil anuncia contato)",
++    // PATCHED 14-15.2 rows: the "withheld" label was an inference (CALL/TEXT does not
++    // prove an E-mail button). Old rows are shown as what the response really had.
++    not_delivered: "Campo comercial vazio",
+     hidden: "Contato oculto pelo perfil",
+     omitted: "Campo omitido pela consulta",
+     not_professional: "Conta pessoal (sem botão Contato)",
+@@ -68,11 +70,6 @@
+     if (accountType === 1 || hidden(user.is_professional_account)) return "personal";
+     return "unknown";
+   }
+-  // Owner advertises a Contact button (CALL/TEXT/...), "UNKNOWN" means none.
+-  function advertisedContact(user) {
+-    var method = text(user.business_contact_method).toUpperCase();
+-    return !!method && method !== "UNKNOWN" && method !== "NONE";
+-  }
+   function valueState(user, field) {
+     if (!own.call(user, field)) return "absent";
+     var value = user[field];
+@@ -97,26 +94,19 @@
+       if (state === "invalid") invalid = true;
+       if (state === "valid" && !email) { email = validEmail(user[field]); source = field; }
+     });
+-    var type = profileType(user), status, displayed = published(user.should_show_public_contacts);
+-    var webShape = keys.business_email !== "absent" && keys.public_email !== "valid";
++    var type = profileType(user), status;
+     keys.business_phone_number = valueState(user, "business_phone_number");
+-    // Web captures since 2022 return business_* as null even for profiles whose
+-    // app shows a Contact button: with the display flag on, null means "not
+-    // delivered by this route", not "no email published".
+-    var withheld = type !== "personal" && displayed && advertisedContact(user) && !email &&
+-      keys.business_email !== "absent" && keys.business_email !== "valid" &&
+-      (keys.business_phone_number === "null" || keys.business_phone_number === "empty");
+     // Personal accounts have no Contact button; a hidden flag wins over any value.
++    // business_contact_method (CALL, TEXT...) says nothing about an E-mail button,
++    // so it is never used to label a profile: an empty field is just empty.
+     if (type === "personal") status = "not_professional";
+     else if (hidden(user.should_show_public_contacts)) status = "hidden";
+     else if (email) status = "found";
+     else if (invalid) status = "invalid";
+-    // Only a profile that actually advertises a contact method is reported as
+-    // withheld; without it, an empty field is just an empty field.
+-    else if (returned) status = withheld ? "not_delivered" : "empty";
++    else if (returned) status = "empty";
+     else status = "omitted";
+     return { status: status, email: status === "found" ? email : "", source: status === "found" ? source : "",
+-      profileType: type, fieldReturned: returned, keys: keys, withheld: withheld };
++      profileType: type, fieldReturned: returned, keys: keys, withheld: false };
+   }
+   function commercialEmail(row) {
+     if (!row || typeof row !== "object") return "";
+@@ -236,7 +226,7 @@
+     var result = { email: contact.email, phone: "", emailSource: contact.source, phoneSource: "", biography: bio,
+       emailStatus: contact.status, phoneStatus: visible ? "not_returned" : "not_published",
+       profileType: contact.profileType, emailFieldReturned: contact.fieldReturned, emailKeys: contact.keys,
+-      contactWithheld: contact.withheld };
++      contactWithheld: false };
+     if (visible) {
+       phoneFields.forEach(function (field) {
+         if (own.call(user, field)) result.phoneStatus = "not_published";
+--- 15.2/commercial-profile-reader.js
++++ 15.3/commercial-profile-reader.js
+@@ -1,4 +1,4 @@
+-/* PATCHED 14: one ordinary web_profile_info request per profile, serial and
++/* PATCHED 14-15.3: one ordinary web_profile_info request per profile, serial and
+  * fail closed. Every real response is summarised (field names, profile flags,
+  * masked email) so the commercial-contact field can be verified, not guessed.
+  * A live public commercial contact has not yet been confirmed.
+@@ -14,14 +14,19 @@
+   var schemaKey = "ig_commercial_contact_schema_v14";
+   var evidenceKey = "ig_commercial_contact_evidence_v14";
+   var lastStartKey = "ig_commercial_web_last_start";
++  // Adaptive spacing between profile requests, shared by every dashboard.
++  var pacingKey = "ig_contact_pacing";
++  var baseSpacing = 10000, maxSpacing = 120000;
++  // Answered profiles, kept across extractions so the same profile is not asked twice.
++  var profileCacheKey = "ig_contact_profile_cache_v15";
++  var cacheTtl = 14 * 864e5, missingTtl = 3 * 864e5, cacheLimit = 3000;
+   var lockName = "ig-commercial-profile-read";
+   // Every read-modify-write of the shared pause goes through this lock, in the reader
+   // and in the dashboard, so two tabs can never shorten each other's pause.
+   var cooldownLock = "ig-contact-cooldown";
+   var own = Object.prototype.hasOwnProperty;
+   var professionalTypes = ["business", "creator", "professional"];
+-  // Omission blocks the route only after repeated professional profiles and no
+-  // response with the field: personal or unknown accounts never count.
++  // The omission/withheld limits are kept only so older saved schemas still parse.
+   var omittedProfessionalLimit = 3, withheldProfessionalLimit = 3, refusedLimit = 2, evidenceLimit = 20, listLimit = 10;
+   var flagFields = ["account_type", "is_business_account", "is_professional_account", "is_business",
+     "should_show_public_contacts", "business_contact_method", "is_private"];
+@@ -80,23 +85,35 @@
+     });
+     return schema;
+   }
+-  // Only the two field-level findings end the route. A refusal (429/400) is an
+-  // access failure: it pauses with Retry-After and waits for a manual restart.
+-  // "omitted": the route never returns the field for professional profiles.
+-  // "withheld": it returns contact fields as null for profiles that show a
+-  // Contact button, and has never delivered a single public email.
+-  function blockReason(value) {
+-    var schema = readSchema(value);
+-    if (schema.keysPresent === 0 && schema.omittedProfessional.length >= omittedProfessionalLimit) return "omitted";
+-    if (schema.found === 0 && schema.withheldProfessional.length >= withheldProfessionalLimit) return "withheld";
+-    return "";
+-  }
++  // PATCHED 15.3: profiles without an email never stop the queue (each row keeps its own
++  // status). Only access failures (429, 403, login...) pause it. Kept for compatibility.
++  function blockReason() { return ""; }
+   // Diagnostic only: repeated refusals with no profile answer at all.
+   function routeRefusing(value) {
+     var schema = readSchema(value);
+     return schema.responses === 0 && schema.refusals >= refusedLimit;
+   }
+   function unsupported(value) { return !!blockReason(value); }
++  function valueType(value) {
++    if (value === null || value === undefined) return "null";
++    if (typeof value === "string") return value.trim() ? "texto" : "vazio";
++    if (Array.isArray(value)) return "lista";
++    return typeof value === "object" ? "objeto" : typeof value;
++  }
++  // Email-related paths anywhere in a response: names and value types only, never values.
++  function emailPaths(body) {
++    var out = [], seen = 0;
++    (function walk(node, path, depth) {
++      if (!node || typeof node !== "object" || depth > 8 || seen > 4000) return;
++      Object.keys(node).forEach(function (key) {
++        seen++;
++        var child = node[key], here = path ? path + "." + key : key;
++        if (/e-?mail|contact_method|should_show_public_contacts/i.test(key) && out.length < 40) out.push(here + "=" + valueType(child));
++        if (child && typeof child === "object") walk(Array.isArray(child) ? child[0] : child, Array.isArray(child) ? here + "[]" : here, depth + 1);
++      });
++    })(body, "", 0);
++    return out;
++  }
+   function remember(list, username) {
+     return list.indexOf(username) >= 0 ? list : list.concat(username).slice(-listLimit);
+   }
+@@ -109,21 +126,51 @@
+   }
+   function create(deps) {
+     var cache = new Map();
+-    function assertOpen(saved, probe) {
++    function readPacing(saved) {
++      var p = saved && saved[pacingKey] && typeof saved[pacingKey] === "object" ? saved[pacingKey] : {};
++      var spacing = Math.min(maxSpacing, Math.max(baseSpacing, Number(p.spacing) || baseSpacing));
++      return { spacing: spacing, okStreak: Math.max(0, Number(p.okStreak) || 0) };
++    }
++    // Refusal: double the spacing (up to 2 min) for when the pause ends. Five answered
++    // profiles in a row bring it 20% closer to the 10 s base.
++    function updatePacing(ok) {
++      return Promise.resolve(deps.storage.get(pacingKey)).then(function (saved) {
++        var p = readPacing(saved);
++        if (ok) {
++          p.okStreak += 1;
++          if (p.okStreak >= 5) { p.spacing = Math.max(baseSpacing, Math.round(p.spacing * 0.8)); p.okStreak = 0; }
++        } else { p.spacing = Math.min(maxSpacing, p.spacing * 2); p.okStreak = 0; }
++        return deps.storage.set({ [pacingKey]: p });
++      }).catch(function () {});
++    }
++    function cachedProfile(saved, username, userId) {
++      var all = saved && saved[profileCacheKey] && typeof saved[profileCacheKey] === "object" ? saved[profileCacheKey] : {};
++      var hit = all[endpoint + ":" + username];
++      if (!hit || !hit.result || typeof hit.result !== "object") return null;
++      var ttl = hit.result.contactSkip ? missingTtl : cacheTtl;
++      if (!(Number(hit.at) > deps.now() - ttl)) return null;
++      // A username can move to another account: only the same id may reuse it.
++      if (userId && hit.userId && hit.userId !== userId) return null;
++      return hit.result;
++    }
++    function storeProfile(username, userId, result) {
++      if (!result || result.contactOutcome === "identity_mismatch") return Promise.resolve();
++      return Promise.resolve(deps.storage.get(profileCacheKey)).then(function (saved) {
++        var all = saved && saved[profileCacheKey] && typeof saved[profileCacheKey] === "object" ? saved[profileCacheKey] : {};
++        all[endpoint + ":" + username] = { at: deps.now(), userId: String(result.contactUserId || userId || ""), result: result };
++        var keys = Object.keys(all);
++        if (keys.length > cacheLimit) keys.sort(function (a, b) { return (all[a].at || 0) - (all[b].at || 0); })
++          .slice(0, keys.length - cacheLimit).forEach(function (k) { delete all[k]; });
++        return deps.storage.set({ [profileCacheKey]: all });
++      }).catch(function () { /* the cache must never change the collection result */ });
++    }
++    // Only the saved 429 pause closes the queue; a profile without an email never does.
++    function assertOpen(saved) {
+       if (Number(saved[cooldownKey]) > deps.now()) {
+         var cooldown = stopped("O Instagram está em pausa. Aguarde o horário indicado.", "cooldown");
+         cooldown.cooldownUntil = Number(saved[cooldownKey]);
+         throw cooldown;
+       }
+-      // A manual one-profile check may re-evaluate the route; the queue may not.
+-      var reason = probe ? "" : blockReason(saved[schemaKey]);
+-      if (reason) {
+-        var blocked = stopped(reason === "withheld"
+-          ? "A consulta web retém o contato dos perfis comerciais (perfil anuncia contato, e-mail e telefone nulos). A fila está interrompida para não gastar consultas sem retorno."
+-          : "A consulta web não trouxe o campo de e-mail comercial em perfis profissionais. A fila está interrompida para não gastar consultas sem retorno.", "unsupported");
+-        blocked.blockReason = reason;
+-        throw blocked;
+-      }
+     }
+     function record(entry) {
+       return Promise.resolve().then(function () { return deps.storage.get(evidenceKey); }).then(function (saved) {
+@@ -139,9 +186,6 @@
+           schema.foundUsers = remember(schema.foundUsers, username);
+           if (!schema.firstFound) schema.firstFound = { at: deps.now(), username: username, email: maskEmail(contact.email), probe: !!probe };
+         }
+-        if (contact.contactWithheld && professionalTypes.indexOf(contact.profileType) >= 0) {
+-          schema.withheldProfessional = remember(schema.withheldProfessional, username);
+-        }
+         if (contact.emailFieldReturned) {
+           schema.keysPresent += 1;
+           schema.keysPresentUsers = remember(schema.keysPresentUsers, username);
+@@ -215,6 +259,7 @@
+       } finally { clearTimeout(timer); }
+       var body = null;
+       try { body = JSON.parse(raw); } catch (err) { body = null; }
++      if (body && typeof body === "object") entry.emailPaths = emailPaths(body);
+       // Instagram's text ends up in HTML notifications: keep it inert and short.
+       var message = body && typeof body === "object" && typeof body.message === "string"
+         ? body.message.replace(/[<>&"']/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) : "";
+@@ -301,14 +346,17 @@
+       return deps.locks.request(lockName, async function () {
+         try {
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+-          var saved = await deps.storage.get([cooldownKey, schemaKey, lastStartKey]);
+-          assertOpen(saved, probe);
++          var saved = await deps.storage.get([cooldownKey, schemaKey, lastStartKey, pacingKey, profileCacheKey]);
++          assertOpen(saved);
+           if (cache.has(cacheKey) && usable(cache.get(cacheKey))) return decided(cache.get(cacheKey), saved[schemaKey], true);
+-          var delay = Math.max(0, Number(saved[lastStartKey]) + 10000 - deps.now());
++          // Answered before (this or another extraction): no new request for the same profile.
++          var stored = probe ? null : cachedProfile(saved, username, userId);
++          if (stored) { cache.set(cacheKey, stored); return decided(stored, saved[schemaKey], true); }
++          var delay = Math.max(0, Number(saved[lastStartKey]) + readPacing(saved).spacing - deps.now());
+           if (delay) await deps.wait(delay);
+           // Another dashboard can save a cooldown or a decision while this reader waits.
+           saved = await deps.storage.get([cooldownKey, schemaKey]);
+-          assertOpen(saved, probe);
++          assertOpen(saved);
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+           await deps.storage.set({ [lastStartKey]: deps.now() });
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+@@ -319,6 +367,7 @@
+             var refusal = failure && (failure.stopCode === "rate_limit" ||
+               (failure.stopCode === "access" && failure.response && failure.response.status === 400));
+             if (refusal) {
++              await updatePacing(false);
+               var after = await noteOutcome("refusal");
+               // Diagnostic signal only: the pause and the manual restart are unchanged.
+               if (routeRefusing(after)) {
+@@ -330,13 +379,14 @@
+           }
+           finally { await record(entry); }
+           // 404 proves the route answers; only a parsed user object is a profile.
+-          if (entry.envelope) await noteOutcome(entry.profilePayload ? "profile" : "response");
++          if (entry.envelope) { await noteOutcome(entry.profilePayload ? "profile" : "response"); await updatePacing(true); }
+           var schemaValue = saved[schemaKey];
+           if (!result.contactSkip) schemaValue = await updateSchema(username, result.publicContactResult, probe);
+           else schemaValue = (await deps.storage.get(schemaKey))[schemaKey];
+           // Cache before the cancellation check so a resume never repeats this request.
+           result.requestedUserId = userId;
+           cache.set(cacheKey, result);
++          await storeProfile(username, userId, result);
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+           return decided(result, schemaValue, false);
+         } catch (error) {
+@@ -348,6 +398,7 @@
+   }
+   return { create: create, retryUntil: retryUntil, unsupported: unsupported, readSchema: readSchema, maskEmail: maskEmail,
+     saveCooldown: saveCooldown, cooldownLock: cooldownLock, stateSinceKey: "ig_contact_state_since",
++    pacingKey: pacingKey, profileCacheKey: profileCacheKey, emailPaths: emailPaths, baseSpacing: baseSpacing, maxSpacing: maxSpacing,
+     blockReason: blockReason, routeRefusing: routeRefusing, endpoint: endpoint, cooldownKey: cooldownKey, schemaKey: schemaKey, evidenceKey: evidenceKey,
+     omittedProfessionalLimit: omittedProfessionalLimit, withheldProfessionalLimit: withheldProfessionalLimit, refusedLimit: refusedLimit };
+ });
+--- 15.2/dashboard.js
++++ 15.3/dashboard.js
+@@ -1297,7 +1297,7 @@
+                                               t._v(". "),
+                                             ])
+                                           : s("span", [
+-                                              t._v(" Consultando perfil "),
++                                              t._v(t.pageInfo.has_next_page ? " Lendo comentários: " : " Consultando perfil "),
+                                               s(
+                                                 "span",
+                                                 {
+@@ -1306,11 +1306,11 @@
+                                                 },
+                                                 [
+                                                   t._v(
+-                                                    t._s(Math.min(t.loadUserIndex + 1, t.followList.length))
++                                                    t._s(t.pageInfo.has_next_page ? t.followList.length : Math.min(t.loadUserIndex + 1, t.followList.length))
+                                                   ),
+                                                 ]
+                                               ),
+-                                              t._v(" de " + t._s(t.followList.length)),
++                                              t._v(t.pageInfo.has_next_page ? " perfis encontrados (consultas de e-mail começam no fim da lista)" : " de " + t._s(t.followList.length)),
+                                               t.lastScrapedCount > 0
+                                                 ? s("span", [
+                                                     t._v(
+@@ -3148,6 +3148,7 @@
+             lastUpdateHistoryDataStr: "",
+             configs: {},
+             lastExtractData: [],
++            pendingExtractData: [],
+             autoContinueTimer: null,
+             listenerUnloaded: !1,
+             localStorageExtractKeys: [],
+@@ -3161,6 +3162,7 @@
+             retryAfterUntil: null,
+             manualPause: !1,
+             lastProfileRequestStartedAt: 0,
++            lastDetailFromCache: !1,
+             commercialStartRequired: false,
+             commercialContactUnavailable: false,
+             commercialProfileReader: null,
+@@ -3251,11 +3253,10 @@
+               "Campo de e-mail presente em " + schema.keysPresent + " resposta(s)" + names(schema.keysPresentUsers) +
+                 "; omitido em " + schema.omittedProfessional.length + " perfil(is) profissional(is)" + names(schema.omittedProfessional) +
+                 "; outras respostas sem o campo: " + schema.omittedOther,
+-              "E-mails públicos entregues: " + schema.found + names(schema.foundUsers) + "; perfis comerciais com contato retido (botão ativo, e-mail e telefone nulos): " +
+-                schema.withheldProfessional.length + names(schema.withheldProfessional),
++              "E-mails públicos entregues: " + schema.found + names(schema.foundUsers),
+               "Respostas desta consulta: " + schema.responses + " (perfis entregues: " + schema.profiles + "); recusas seguidas (HTTP 429/400): " + schema.refusals +
+                 (schema.lastRefusalAt ? " (última em " + when(schema.lastRefusalAt) + ")" : ""),
+-              "Decisão da fila: " + ({ omitted: "encerrada (campo omitido em perfis profissionais)", withheld: "encerrada (contato retido pela consulta web)" }[reader.blockReason(schema)] || "liberada") +
++              "Fila: perfis sem e-mail não param a fila; só falhas de acesso (429, login...) pausam" +
+                 (reader.routeRefusing(schema) ? " · atenção: o Instagram recusou as consultas e nenhuma resposta de perfil foi obtida até agora" : ""),
+               "Contato comercial público em resposta real: " + (proof ? "SIM — @" + proof.username + " em " + when(proof.at) + " (" + proof.email + ")" : "NÃO comprovado"),
+               "Últimas respostas reais (mais recente primeiro):"
+@@ -3266,8 +3267,9 @@
+               lines.push((i + 1) + ") " + when(entry.at) + " · @" + entry.username + (entry.probe ? " · verificação manual" : "") +
+                 " · HTTP " + (null === entry.http || undefined === entry.http ? "-" : entry.http) + (429 === entry.http ? " · Retry-After=" + (entry.retryAfter ? entry.retryAfter : "ausente") : (entry.retryAfter ? " · Retry-After=" + entry.retryAfter : "")) +
+                 (false === entry.cooldownSaved ? " · pausa salva=NÃO" : "") +
+-                " · resultado=" + (entry.outcome || "-") + (entry.withheld ? " (contato retido)" : "") + (entry.profileType ? " · tipo=" + entry.profileType : "") + (keys ? " · " + keys : "") +
+-                (flags ? " · " + flags : "") + (entry.email ? " · e-mail=" + entry.email : "") + (entry.message ? " · mensagem=" + entry.message : ""));
++                " · resultado=" + (entry.outcome || "-") + (entry.profileType ? " · tipo=" + entry.profileType : "") + (keys ? " · " + keys : "") +
++                (flags ? " · " + flags : "") + (entry.email ? " · e-mail=" + entry.email : "") + (entry.message ? " · mensagem=" + entry.message : "") +
++                (Array.isArray(entry.emailPaths) ? " · campos de e-mail recebidos: " + (entry.emailPaths.length ? entry.emailPaths.join(", ") : "nenhum") : ""));
+             });
+             var latest = this.contactEvidence.filter(function (entry) { return entry && Array.isArray(entry.userKeys); })[0];
+             if (latest) lines.push("Campos do perfil na última resposta com perfil (@" + latest.username + ", " + latest.userKeys.length + "): " + latest.userKeys.join(", "));
+@@ -3277,7 +3279,7 @@
+         created: function () {
+           var t = d.a.runtime.getManifest(),
+             e = t.version;
+-          (this.version = "v".concat(e) + " · PATCHED 15.2 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
++          (this.version = "v".concat(e) + " · PATCHED 15.3 · Diagnóstico do contato comercial (coleta não restaurada)"), this.startAfterSavedCooldown();
+           var self = this;
+           // The panel's cooldown gates need a clock of their own: the DJ bar's
+           // ticker can be absent and must not decide when Iniciar re-enables.
+@@ -3315,7 +3317,7 @@
+               var counts = {};
+               self.followList.forEach(function (u) { if (u.detailLoaded && u.emailStatus) counts[u.emailStatus] = (counts[u.emailStatus] || 0) + 1; });
+               stat.textContent = self.type === 4
+-                ? total + ' perfis encontrados | ' + checked + ' consultados | ' + self.emailList.length + ' e-mails comerciais | não entregues pela web ' + (counts.not_delivered || 0) + ' · vazios ' + (counts.empty || 0) +
++                ? total + ' perfis encontrados | ' + checked + ' consultados | ' + self.emailList.length + ' e-mails comerciais | vazios ' + ((counts.empty || 0) + (counts.not_delivered || 0)) +
+                   ' · ocultos ' + (counts.hidden || 0) + ' · omitidos ' + (counts.omitted || 0) + ' · pessoais ' + (counts.not_professional || 0) +
+                   ' · indisponíveis ' + ((counts.profile_unavailable || 0) + (counts.identity_mismatch || 0))
+                 : total + ' loaded | ' + hot + ' hot leads';
+@@ -3854,6 +3856,9 @@
+             });
+           },
+           detailRequestDelay: function (seconds) {
++            // The last row came from the profile cache (no request): go on. The reader still
++            // spaces real requests from the last one any dashboard sent.
++            if (this.lastDetailFromCache) return 250;
+             var wait = Math.max(10000, Number(seconds) * 1000 || 10000);
+             var started = Number(this.lastProfileRequestStartedAt) || 0;
+             return started ? Math.max(0, wait - Math.max(0, Date.now() - started)) : wait;
+@@ -4524,9 +4529,11 @@
+                                         count: r[3] || 0,
+                                       });
+                                     var p = r[0] || [],
++                                      // E-mail checks wait for the end of the list: a page without a new
++                                      // cursor (missing or repeated) ends it, so they never wait forever.
+                                       m = {
+                                         end_cursor: r[1],
+-                                        has_next_page: r[2],
++                                        has_next_page: !!r[2] && !!r[1] && r[1] !== t.pageInfo.end_cursor,
+                                       },
+                                       g = s.itemsDataKeys.split("|");
+                                     (p = k(p, g[0])),
+@@ -4602,7 +4609,7 @@
+                                       })),
+                                       (t.pageInfo = m),
+                                       p.length > 0 &&
+-                                        (t.followList = t.followList.concat(p)),
++                                        ((t.followList = t.followList.concat(p)), t.persistExtractRows()),
+                                       !t.pageInfo.has_next_page &&
+                                         (t.updateHistory(0 === t.followList.length ? { isFromComplete: !0 } : {}),
+                                         (document.body.scrollTop = 0),
+@@ -5399,8 +5406,12 @@
+           loadUserInfoDetailWebProfile: function (userId, username) {
+             var t = this, epoch = t.extractionEpoch, reader = t.ensureCommercialReader();
+             t.lastProfileRequestStartedAt = Date.now();
++            t.lastDetailFromCache = !1;
+             return reader(userId, username, function () {
+               return !t.isPaused && t.extractionEpoch === epoch;
++            }).then(function (result) {
++              t.lastDetailFromCache = !!(result && result.fromCache);
++              return result;
+             });
+           },
+           applyCommercialEvidence: function (saved) {
+@@ -5422,27 +5433,7 @@
+               console.warn("[IG Extractor] Could not read contact diagnostics", error);
+             });
+           },
+-          pauseForUnavailableCommercialContact: function () {
+-            var reader = window.IGCommercialProfileReader, schema = this.contactSchema || reader.readSchema(null);
+-            var reason = reader.blockReason(schema) || "omitted";
+-            var omitted = schema.omittedProfessional.length, withheld = schema.withheldProfessional.length;
+-            this.commercialBlockReason = reason;
+-            this.commercialContactUnavailable = true;
+-            this.manualPause = true;
+-            this.pauseExtraction();
+-            this.updateHistory();
+-            this.$buefy.notification.open({
+-              indefinite: true,
+-              message: "withheld" === reason
+-                ? "Diagnóstico automático: em " + withheld + " perfis comerciais com botão Contato ativo, a consulta web devolveu e-mail e telefone nulos, e nenhum e-mail público foi entregue. A web retém esse contato; o e-mail do botão Contato não vem por esta rota. A fila foi interrompida para não gastar consultas. Os perfis coletados estão preservados e o diagnóstico vai na exportação XLSX."
+-                : "Diagnóstico automático: a consulta web omitiu o campo de e-mail comercial em " + omitted + " perfis profissionais, e nenhuma resposta trouxe esse campo. A fila foi interrompida para não gastar consultas. Contas pessoais não contam. Os perfis coletados estão preservados e o diagnóstico vai na exportação XLSX.",
+-              position: "is-bottom-right", type: "is-warning", hasIcon: true
+-            });
+-          },
+           commercialStatusMessage: function () {
+-            if (this.commercialContactUnavailable) return "withheld" === this.commercialBlockReason
+-              ? "Fila encerrada pelo diagnóstico automático: a consulta web retém o contato dos perfis comerciais (e-mail e telefone nulos com botão Contato ativo)."
+-              : "Fila encerrada pelo diagnóstico automático: a consulta web omite o campo de e-mail comercial em perfis profissionais.";
+             if (this.retryAfterUntil > this.contactStatusNow) return "Coleta pausada até " + new Date(this.retryAfterUntil).toLocaleString() + " (limite do Instagram). Nenhuma nova tentativa automática.";
+             if (this.commercialStartRequired) return "Pronto para coletar o e-mail do botão Contato. Nada é consultado antes de Iniciar.";
+             if (this.isComplete) return "Coleta concluída. Nenhuma consulta em andamento.";
+@@ -5522,7 +5513,11 @@
+                 keys.push({ key: key, date: h()().valueOf() });
+                 self.localStorageExtractKeys = keys;
+                 var data = { localStorageExtractKeys: keys };
+-                data[key] = self.mergeExtractRows(self.lastExtractData, self.processedList);
++                // Comment mode keeps every listed commenter, checked or not, so an interrupted
++                // e-mail check never loses the comment list (resume re-queues the pending ones).
++                data[key] = 4 === self.type
++                  ? self.mergeExtractRows((self.lastExtractData || []).concat(self.pendingExtractData || []), self.followList)
++                  : self.mergeExtractRows(self.lastExtractData, self.processedList);
+                 return d.a.storage.local.set(data);
+               });
+             })).catch(function (error) {
+@@ -5572,10 +5567,15 @@
+             // resume, because counters saved by older versions are not reliable (Comment mode
+             // counted listed commenters as extracted; the DJ filter hid rows from the count).
+             // Rows that were never checked, or failed, are dropped so they get listed again.
+-            var ids = {}, names = {};
+-            var kept = this.mergeExtractRows(rows, []).filter(function (row) {
++            var ids = {}, names = {}, all = this.mergeExtractRows(rows, []);
++            var kept = all.filter(function (row) {
+               return !!row.loaded && false !== row.detailLoaded;
+             });
++            // Comment mode: commenters saved but not yet checked stay saved (they are listed and
++            // queued again), so a resume whose list stops early never shrinks the saved list.
++            this.pendingExtractData = 4 === this.type ? all.filter(function (row) {
++              return !(!!row.loaded && false !== row.detailLoaded);
++            }) : [];
+             kept.forEach(function (row) {
+               if (row.userId) ids[String(row.userId)] = !0;
+               if (row.userName) names[String(row.userName).toLowerCase()] = !0;
+@@ -5627,24 +5627,42 @@
+             }
+             t.contactProbeRunning = true;
+             // One manual request through the same lock, spacing, cooldown and evidence log.
++            var startedAt = Date.now();
++            var summary = function (outcomeText, fromCache) {
++              // This check's own log entry; for a profile already answered on this page, that answer's entry.
++              var entry = (t.contactEvidence || []).filter(function (item) {
++                return item && item.username === username && (fromCache || (item.probe && Number(item.at) >= startedAt));
++              })[0];
++              var safe = function (v) { return String(v).replace(/[<>&"']/g, ""); };
++              var parts = ["Diagnóstico de 1 consulta · @" + safe(username), "Consulta: GET /api/v1/users/web_profile_info/"];
++              if (fromCache) parts.push("Sem nova consulta: perfil já respondido nesta página" + (entry ? " (" + new Date(entry.at).toLocaleString() + ")" : ""));
++              if (entry) {
++                parts.push("HTTP " + (null == entry.http ? "-" : entry.http) + (429 === entry.http ? " · Retry-After=" + safe(entry.retryAfter || "ausente") : ""));
++                parts.push("Campos de e-mail recebidos (sem valores): " + (Array.isArray(entry.emailPaths) ? (entry.emailPaths.length ? entry.emailPaths.map(safe).join(", ") : "nenhum") : "nenhum corpo JSON"));
++              }
++              parts.push("Resultado: " + safe(outcomeText));
++              return parts.join("<br>");
++            };
+             t.ensureCommercialReader()("", username, null, { probe: true }).then(function (result) {
+               var outcome = result.contactOutcome || "";
+-              t.$buefy.notification.open({
+-                indefinite: true, position: "is-bottom-right", hasIcon: true,
+-                type: "found" === outcome ? "is-success" : "is-warning",
+-                message: "Verificação de @" + username + (result.fromCache ? " (resposta já recebida nesta página)" : "") + ": " +
+-                  (window.IGPublicContacts.statusText[outcome] || outcome) + ". Detalhes em Copiar diagnóstico."
++              return t.refreshCommercialEvidence().then(function () {
++                t.$buefy.notification.open({
++                  indefinite: true, position: "is-bottom-right", hasIcon: true,
++                  type: "found" === outcome ? "is-success" : "is-warning",
++                  message: summary(window.IGPublicContacts.statusText[outcome] || outcome, !!result.fromCache)
++                });
+               });
+             }).catch(function (error) {
+-              if (error && (error.routeRefusing || t.isExtraction429(error))) t.notifyCommercialRefusal(error);
+-              if (t.isExtraction429(error)) t.pauseExtractionOn429(error, true);
+-              else {
+-                if (error && error.cooldownUntil) t.retryAfterUntil = Math.max(t.retryAfterUntil || 0, error.cooldownUntil);
+-                t.$buefy.notification.open({
++              t.refreshCommercialEvidence().then(function () {
++                if (error && error.stopCode !== "cooldown") t.$buefy.notification.open({
+                   indefinite: true, position: "is-bottom-right", type: "is-warning", hasIcon: true,
+-                  message: error && error.commercialRequestStopped ? error.message : "Não foi possível concluir a verificação. Nenhuma nova tentativa automática."
++                  message: summary(error && error.commercialRequestStopped ? error.message : "falha na consulta")
+                 });
+-              }
++              });
++              // A refused check pauses exactly like the queue (429: shared pause, no retry).
++              if (t.isExtraction429(error)) t.pauseExtractionOn429(error, false);
++              else if (error && error.cooldownUntil) t.retryAfterUntil = Math.max(t.retryAfterUntil || 0, error.cooldownUntil);
++              if (error && error.stopCode === "cooldown") t.$buefy.toast.open({ message: error.message, type: "is-warning", duration: 6e3 });
+             }).then(function () {
+               t.contactProbeRunning = false;
+               return t.refreshCommercialEvidence();
+@@ -5840,6 +5858,10 @@
+                           t.detailTimer = setTimeout(function () {
+                             extractionCycle.waiting = !1;
+                             if (!t.isExtractionCycleCurrent(extractionCycle)) return t.finishExtractionCycle("detail", extractionCycle);
++                            // Comment mode: list every commenter first (saved as it loads); profile checks
++                            // start only when the list is complete, so a 429 on a check never cuts the list.
++                            if (4 === t.type && t.pageInfo.has_next_page)
++                              return void t.advanceExtractionCycle("detail", extractionCycle, "loadUserInfoDetail");
+                             if (t.loadUserIndex >= t.followList.length) {
+                               // Every row answered (or was recorded as unavailable/failed) and no page
+                               // left: finish instead of looping, even if the queue paused on the last row.
+@@ -6099,16 +6121,8 @@
+                                                     );
+                                                   extractionCycle.processedIndex = detailUserIndex;
+                                                   t.persistExtractRows();
+-                                                  if (4 === t.type) {
+-                                                    t.refreshCommercialEvidence();
+-                                                    // Only repeated professional omissions block the route (see reader).
+-                                                    if (s.commercialSchemaUnsupported === true) {
+-                                                      t.loadUserIndex = detailUserIndex + 1;
+-                                                      t.contactSchema = s.commercialSchema || t.contactSchema;
+-                                                      t.pauseForUnavailableCommercialContact();
+-                                                      return e.abrupt("return");
+-                                                    }
+-                                                  }
++                                                  // A profile without an email is a row result, never a reason to stop the queue.
++                                                  if (4 === t.type) t.refreshCommercialEvidence();
+                                                   // Email comes exclusively from the published Instagram contact fields.
+                                                   if (t.subscription.isPro) {
+                                                     e.next = 34;
+@@ -6260,10 +6274,6 @@
+                                     if (e && (e.routeRefusing || t.isExtraction429(e))) t.notifyCommercialRefusal(e);
+                                     if (t.isExtraction429(e)) t.pauseExtractionOn429(e, true);
+                                     else {
+-                                      if (e.stopCode === "unsupported") {
+-                                        t.commercialContactUnavailable = true;
+-                                        if (e.blockReason) t.commercialBlockReason = e.blockReason;
+-                                      }
+                                       if (e.cooldownUntil) t.retryAfterUntil = e.cooldownUntil;
+                                       t.manualPause = true;
+                                       t.pauseExtraction();
+@@ -7112,6 +7122,7 @@
+                                               (t.lastScrapedCount = 0),
+                                               (t.isLoading = !0),
+                                               (t.lastExtractData = []),
++                                              (t.pendingExtractData = []),
+                                               t.startLoadAllData();
+                                           case 26:
+                                           case "end":
+--- 15.2/LEIA-ME.txt
++++ 15.3/LEIA-ME.txt
+@@ -1,109 +1,67 @@
+-Autland IG Extractor — PATCHED 15.2 — Contato comercial com diagnóstico
++Autland IG Extractor — PATCHED 15.3 — Diagnóstico do contato comercial
+ 
+ SITUAÇÃO (leia antes de instalar)
+-- Modos Seguidores, Seguindo, Hashtag, Curtidas, Local e Lista: corrigidos e
+-  testados de ponta a ponta com respostas simuladas.
+-- Modo Comment: a coleta do e-mail do botão Contato → E-mail AINDA NÃO ESTÁ
+-  COMPROVADA. No seu teste real de 05/10/2026 (12:59), a lista de comentários
+-  carregou, mas o Instagram respondeu HTTP 429 (limite) já na 1ª consulta de
+-  perfil. A extensão pausou por 60 minutos e não repetiu nada. Às 13:13 houve
+-  outro 429 na 1ª consulta. A COLETA NÃO ESTÁ RESTAURADA.
+-
+-O QUE MUDOU NA VERSÃO 15.2
+-- A pausa salva passa a ser gravada sob uma trava única, em todas as abas
+-  (antes, numa corrida rara, uma aba podia gravar a pausa mais curta por cima).
+-  Se a gravação falhar, o painel avisa.
+-- O diagnóstico mostra a pausa salva no navegador (e não só na aba), o
+-  Retry-After de cada 429 ("ausente" quando não vem) e a data em que o estado
+-  salvo deste navegador começou. Se essa data for posterior ao último 429, a
+-  pausa e os contadores foram apagados fora da extensão.
+-
+-POR QUE O MODO COMMENT CONTINUA SEM PROVA
+-Foram examinadas cerca de 75 respostas reais do Instagram publicadas por
+-terceiros, sem contato com a Meta:
+-1. A consulta web (web_profile_info) devolve business_email NULO em todas as
+-   capturas de 2022 em diante, inclusive em perfis comerciais com botão de
+-   contato.
+-2. Nas capturas atuais, o e-mail público só aparece em public_email da API
+-   móvel (/users/{id}/info/), que continua fora do modo Comment, como você
+-   pediu.
+-3. Relatos de setembro de 2026 descrevem HTTP 429 já na primeira consulta
+-   web_profile_info em sessões logadas, como no seu teste da versão 13.
+-Conclusão: é provável que essa rota não entregue o e-mail. A extensão prova o
+-caso no primeiro uso real, gastando poucas consultas, e explica o resultado.
+-
+-O QUE MUDOU NA VERSÃO 15 (todos os modos)
+-- Retomar uma extração do modo Comment não pula mais comentaristas. Antes, a
+-  retomada depois de um 429 pulava quem foi listado mas nunca consultado (na
+-  simulação, 98 de 150; todos, quando o 429 vinha na 1ª consulta).
+-- O histórico guarda um registro por perfil, sem duplicar, e só conta perfis
+-  consultados de verdade.
+-- Históricos antigos com e-mail tirado da bio são limpos ao retomar. A
+-  exportação pelo Histórico do popup segue a mesma regra e ganhou as colunas
+-  "E-mail comercial" e "Status do e-mail".
+-- Filtro DJ: agora só filtra a tabela e a exportação. Antes, com o filtro
+-  ligado, a extração nunca concluía e perfis sumiam do Histórico.
+-- Perfil apagado (HTTP 404) nos outros modos: vira "Perfil indisponível" e a
+-  fila segue. Antes, a extração travava sem concluir. Três seguidos pausam a
+-  fila para você conferir a sessão.
+-- Erro passageiro: 1 nova tentativa por perfil; se persistir, a linha mostra a
+-  falha e a extração conclui.
+-- Perfil renomeado entre a lista e o detalhe mantém o e-mail comercial.
+-- Lista de @perfis: nome inexistente vira "Perfil indisponível", sem consulta
+-  inválida.
+-- A aba de sessão do instagram.com abre no máximo 1 vez a cada 100 perfis.
+-  Antes, no modo Comment com 100, 200... comentaristas, abria a cada perfil.
+-- Pausa 429 salva por outro dashboard: os outros modos continuam sozinhos no
+-  fim da pausa. O modo Comment continua esperando você clicar em Iniciar.
+-- Dois dashboards abertos não apagam mais o histórico um do outro.
+-
+-O QUE CONTINUA DA VERSÃO 14 (modo Comment)
+-- Status por perfil, separado de falha de acesso:
+-    Contato público do Instagram ........ e-mail do campo comercial público
+-    E-mail não entregue pela consulta web  perfil anuncia contato, mas e-mail
+-                                           e telefone vieram nulos
+-    Campo comercial vazio ............... campo veio, sem e-mail
+-    Contato oculto pelo perfil .......... o perfil esconde os contatos
+-    Campo omitido pela consulta ......... a resposta não trouxe o campo
+-    Conta pessoal ....................... não existe botão Contato
+-    Perfil indisponível / divergente .... apagado, renomeado ou outro perfil
+-- Falhas de acesso (429, 403, login, página HTML, rede) aparecem na linha como
+-  falha, nunca como "sem e-mail", e param a fila sem nova tentativa.
+-- A fila só é encerrada pelo diagnóstico com evidência do campo: 3 perfis
+-  profissionais sem o campo, ou 3 perfis comerciais com contato retido e
+-  nenhum e-mail entregue. Contas pessoais e perfis ocultos não contam.
+-- Diagnóstico automático em toda exportação XLSX do modo Comment, em duas
+-  abas: "Diagnostico contato" e "Respostas reais".
+-- "Verificar 1 perfil": UMA consulta, pela mesma fila e limites, para um
+-  @perfil que você vê com Contato → E-mail no app.
++- Modo Comment: a coleta do e-mail de Contato → E-mail NÃO ESTÁ RESTAURADA.
++  Esta versão NÃO foi validada em resposta real do Instagram. Não é a correção
++  final: é uma versão de diagnóstico com as correções de fila abaixo.
++- Nos 3 testes reais de 05/10/2026 (12:59, 13:13 e 14:16), a 1ª consulta de
++  perfil recebeu HTTP 429. Nenhuma resposta de perfil chegou.
++- Mesmo sem o 429, a consulta usada no modo Comment (web_profile_info) traz o
++  e-mail em data.user.business_email. Esse campo veio nulo em todas as
++  respostas reais de terceiros de 2022 em diante. O e-mail aparecia antes por
++  outra consulta: /api/v1/users/{id}/info/, campo user.public_email. Ela
++  continua fora do modo Comment, pela regra que você definiu.
++- Modos Seguidores, Seguindo, Curtidas, Hashtag, Local e Lista: sem mudança.
++
++O QUE MUDOU NA 15.3 (só o que afeta a coleta do e-mail)
++1. Lista primeiro. O modo Comment lê e salva todos os comentaristas antes da
++   1ª consulta de e-mail (cerca de 15 s por página de comentários). Um 429 na
++   consulta de e-mail não corta mais a lista: os comentaristas ficam na
++   tabela, no histórico e na exportação. Uma página sem cursor novo encerra
++   a lista (na 15.2, um cursor repetido deixava a extração sem fim). Numa
++   retomada, os comentaristas já salvos continuam salvos mesmo se a lista
++   parar no meio.
++2. Sem conclusão inventada. CALL/TEXT com e-mail nulo aparece como "Campo
++   comercial vazio". A 15.2 dizia "e-mail não entregue pela consulta web",
++   uma inferência sem prova.
++3. Perfil sem e-mail não para a fila. Vazios, omitidos, ocultos e contas
++   pessoais viram status na linha. Só falhas de acesso pausam (429, 403,
++   login, rede).
++4. Cache por perfil (nome + ID). Um perfil já respondido não é consultado de
++   novo, nem em outra extração: validade de 14 dias, ou 3 dias para perfil
++   indisponível. Linhas vindas do cache não esperam o intervalo.
++5. Intervalo adaptativo. Base de 10 s entre consultas. Cada 429 dobra o
++   intervalo (até 2 min) para depois da pausa. 5 respostas seguidas reduzem
++   20%, até voltar a 10 s.
++6. Diagnóstico de 1 clique ("Verificar 1 perfil"). Faz 1 consulta e mostra:
++   a rota, o HTTP, o Retry-After (se for 429), os nomes e tipos dos campos de
++   e-mail recebidos (sem valores) e o resultado. Nada de cookie, token ou
++   valor pessoal.
+ 
+ PRESERVADO
+-- HTTP 429: pausa compartilhada e salva, pelo Retry-After (60 minutos quando
+-  não informado), nunca encurtada por outra aba. No modo Comment, sem
+-  reinício automático: Iniciar confere a pausa salva antes de qualquer
+-  consulta.
+-- 1 consulta por vez entre dashboards, intervalo mínimo de 10 s.
+-- /users/{id}/info/ continua fora do modo Comment. Sem troca de User-Agent,
+-  autenticação, host, proxy ou API móvel.
++- HTTP 429: pausa compartilhada e salva pelo Retry-After (60 minutos quando
++  não informado), nunca encurtada. No modo Comment nada é repetido
++  automaticamente; Iniciar confere a pausa salva antes de qualquer consulta.
++- 1 consulta por vez entre dashboards e intervalo mínimo de 10 s.
++- Sem troca de cabeçalho, sessão, User-Agent, host, proxy ou conta.
++- /users/{id}/info/ continua fora do modo Comment.
+ - E-mail da bio, de sites e de links NUNCA preenche a coluna de e-mail.
+ 
+-INSTALAÇÃO (é tudo o que você precisa fazer)
++INSTALAÇÃO
+ 1. Feche os dashboards abertos e extraia o ZIP inteiro.
+ 2. Copie TODOS os arquivos para a pasta da extensão já instalada,
+    substituindo os correspondentes.
+ 3. Em chrome://extensions, clique em Recarregar na Autland IG Extractor.
+    Não remova a extensão: isso apagaria o histórico e a pausa salva.
+-4. Abra uma extração. O cabeçalho deve mostrar
+-   "PATCHED 15.2 · Contato comercial com diagnóstico".
+-5. No modo Comment, clique em Iniciar. Nada é consultado antes disso.
++4. Abra uma extração do modo Comment. O cabeçalho deve mostrar
++   "PATCHED 15.3 · Diagnóstico do contato comercial (coleta não restaurada)".
+ 
+-O QUE VOCÊ VAI VER NO MODO COMMENT, E O QUE SIGNIFICA
+-- "Contato público do Instagram" com e-mail na tabela: a rota funciona. O
+-  painel passa a mostrar a prova real (perfil, data e e-mail mascarado).
+-- "E-mail não entregue pela consulta web" repetido: a rota devolve o perfil,
+-  mas e-mail e telefone vêm nulos. Depois de 3 perfis comerciais assim, a fila
+-  encerra sozinha e explica o motivo. É o cenário mais provável.
+-- HTTP 429 ou 400 logo na primeira consulta: a pausa é respeitada e nada é
+-  repetido. Depois do horário mostrado, pode tentar de novo.
+-- Em qualquer caso, exporte o XLSX: as duas abas de diagnóstico trazem tudo o
+-  que é preciso para decidir o próximo passo.
++TESTE REAL EM 1 CLIQUE (depois da pausa mostrada na tela)
++1. No campo "@perfil", digite um perfil que no app do celular mostra
++   Contato → E-mail.
++2. Clique em "Verificar 1 perfil". Sai 1 única consulta.
++3. Tire um print do quadro "Diagnóstico de 1 consulta". Ele decide o caso:
++   - HTTP 200 e "data.user.business_email=null": a rota responde, mas não
++     traz o e-mail. Prova que esta consulta não serve para esse campo.
++   - HTTP 200, "=texto" e "Contato público do Instagram": coleta comprovada.
++   - HTTP 429: limite do Instagram. A pausa é respeitada e nada é repetido.
+--- 15.2/PATCH_NOTES.txt
++++ 15.3/PATCH_NOTES.txt
+@@ -1,3 +1,34 @@
++PATCHED 15.3 — 05/10/2026
++Diagnostic build for Comment mode. The public commercial email is NOT
++restored, and this build was NOT validated against a real Instagram response.
++- Why 15.2 fails: Comment mode asks GET /api/v1/users/web_profile_info/,
++  whose email field data.user.business_email is null in every real capture
++  since 2022, and in the user's three real tests that request got HTTP 429 on
++  the first call. The flow that used to fill the email is
++  GET /api/v1/users/{id}/info/ -> user.public_email. It is still used by the
++  other modes and still excluded from Comment mode by the user's rule.
++- List first: the whole comment list is read and saved before the first
++  profile check, so a 429 on a check no longer cuts the list. A page without
++  a new cursor (missing or repeated) ends the list; in 15.2 a repeated cursor
++  kept the run from ever completing. On resume, commenters saved but not yet
++  checked stay saved even if the list stops early.
++- No inferred labels: business_contact_method CALL/TEXT with a null email is
++  an empty field ("Campo comercial vazio"), not "withheld by the web route".
++- No queue stop for missing emails: empty, omitted, hidden and personal
++  profiles never stop the queue; only access failures pause it.
++- Persistent profile cache (username + id; 14 days, 3 days for unavailable
++  profiles, 3000 profiles): no repeated request across extractions; cached
++  rows skip the per-row wait.
++- Adaptive spacing: 10 s base; each 429/400 doubles it (max 2 min) for after
++  the pause; five answered profiles in a row reduce it by 20%.
++- One-click diagnostic ("Verificar 1 perfil"): one request, then a card with
++  the route, HTTP status, Retry-After, the email-related field paths received
++  (names and value types only) and the result. The same paths go to the
++  diagnostic text and the XLSX diagnostic sheet.
++- Unchanged: request headers and cookies, the 429 pause and Retry-After
++  rules, no automatic retry in Comment mode, the serial lock, the 10 s minimum
++  spacing, no /users/{id}/info/ in Comment mode, no bio/site email.
++
+ PATCHED 15.2 — 05/10/2026
+ Investigation of the second real test (13:13, PATCHED 15.1): the saved pause from
+ 12:59 was missing and the refusal counter was back to 1.

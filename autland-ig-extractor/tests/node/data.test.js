@@ -318,3 +318,158 @@ test('Exportações: mesmas colunas em todos os modos; abas de diagnóstico só 
     assert.deepEqual(plain(first.slice(1).map((r) => r[7])), ['Contato público do Instagram', 'Falha de acesso: limite do Instagram (HTTP 429)']);
   }
 });
+
+/* ---------- PATCHED 15.3: list first, cache across extractions, no stop for missing emails ---------- */
+function commentVm(env, id, query) {
+  const vm = env.instance(query || { type: '4', ins: 'POST' });
+  commentSetup(vm);
+  vm.lastHistoryItem = { id, token: 't', updateTimes: 0, scrapedCount: 0, cursorScrapedCount: 0, count: 0 };
+  vm.isPaused = false;
+  return vm;
+}
+
+test('Comment 15.3: a lista inteira é lida e salva antes da 1ª consulta de e-mail; 429 preserva os comentaristas', async () => {
+  const users = commenters(150);
+  const log = [];
+  const pages = commentPages(users, 50);
+  const env = createEnv(EXT, { quiet: true, axiosGet: (url, cfg) => { if (url.indexOf('/comments/') >= 0) log.push('page'); return pages(url, cfg); } });
+  let savedAtFirstCheck = -1;
+  env.setFetch(async () => {
+    log.push('profile');
+    if (savedAtFirstCheck < 0) savedAtFirstCheck = (env.store.extract_list_HL || []).length;
+    return rate429();
+  });
+  const vm = commentVm(env, 'HL');
+  vm.startLoadAllData();
+  await env.run(3000, () => vm.isPaused);
+  await env.flush(50);
+  assert.deepEqual(log, ['page', 'page', 'page', 'profile'], 'as 3 páginas vêm antes da 1ª consulta; o 429 encerra com 1 consulta');
+  assert.equal(savedAtFirstCheck, 150, 'os comentaristas já estão salvos quando a consulta de e-mail começa');
+  const stored = env.store.extract_list_HL;
+  assert.equal(stored.length, 150);
+  assert.ok(stored.every((r) => r.userName && !r.detailLoaded && !r.email));
+  assert.equal(vm.userList.length, 150, 'tabela e exportação mantêm os 150 comentaristas');
+  assert.ok(env.store.ig_contact_cooldown_until > env.now(), 'pausa do 429 salva');
+});
+
+test('Comment 15.3: perfil já consultado em outra extração não é consultado de novo', async () => {
+  const all = commenters(6);
+  const withEmail = (u) => (u.username === 'user2' ? { business_email: 'vendas2@loja.com' } : {});
+  const env1 = createEnv(EXT, { quiet: true, axiosGet: commentPages(all.slice(0, 4), 50) });
+  const calls1 = [];
+  env1.setFetch(async (url) => { calls1.push(nameOf(url)); return webProfile(all, withEmail)(nameOf(url)); });
+  const vm1 = commentVm(env1, 'HA');
+  vm1.startLoadAllData();
+  await env1.run(3000, () => vm1.isComplete);
+  await env1.flush(30);
+  assert.deepEqual(calls1, ['user0', 'user1', 'user2', 'user3']);
+  // Second post, another dashboard, same browser storage: user2 and user3 commented on both.
+  const env2 = createEnv(EXT, { quiet: true, store: env1.store, now: env1.now() + 3600e3, axiosGet: commentPages(all.slice(2), 50) });
+  const calls2 = [];
+  env2.setFetch(async (url) => { calls2.push(nameOf(url)); return webProfile(all, withEmail)(nameOf(url)); });
+  const vm2 = commentVm(env2, 'HB');
+  vm2.startLoadAllData();
+  await env2.run(3000, () => vm2.isComplete);
+  await env2.flush(30);
+  assert.deepEqual(calls2, ['user4', 'user5'], 'user2 e user3 vêm do cache, sem nova consulta');
+  const byName = Object.fromEntries(vm2.followList.map((r) => [r.userName, r]));
+  assert.equal(byName.user2.email, 'vendas2@loja.com');
+  assert.equal(byName.user2.emailStatus, 'found');
+  assert.ok(vm2.followList.every((r) => r.detailLoaded));
+});
+
+test('Comment 15.3: perfis comerciais sem e-mail (CALL/TEXT ou campo omitido) não param a fila', async () => {
+  const users = commenters(8);
+  const extra = (u) => (Number(u.pk) % 2 ? { business_contact_method: 'CALL' } : { business_email: undefined, business_contact_method: 'TEXT' });
+  const env = createEnv(EXT, { quiet: true, axiosGet: commentPages(users, 50) });
+  const calls = [];
+  env.setFetch(async (url) => { calls.push(nameOf(url)); return webProfile(users, extra)(nameOf(url)); });
+  const vm = commentVm(env, 'HC');
+  vm.startLoadAllData();
+  await env.run(5000, () => vm.isComplete);
+  await env.flush(30);
+  assert.equal(vm.isComplete, true, 'a extração conclui');
+  assert.equal(calls.length, 8, 'todos os perfis consultados');
+  const statuses = vm.followList.map((r) => r.emailStatus);
+  assert.deepEqual(plain(statuses), ['omitted', 'empty', 'omitted', 'empty', 'omitted', 'empty', 'omitted', 'empty']);
+  assert.ok(!vm.followList.some((r) => r.emailStatus === 'not_delivered'));
+});
+
+test('Comment 15.3: perfis vindos do cache não esperam o intervalo de 10 s (nenhuma consulta)', async () => {
+  const users = commenters(5);
+  const env1 = createEnv(EXT, { quiet: true, axiosGet: commentPages(users, 50) });
+  env1.setFetch(async (url) => webProfile(users)(nameOf(url)));
+  const vm1 = commentVm(env1, 'HD');
+  vm1.startLoadAllData();
+  await env1.run(3000, () => vm1.isComplete);
+  await env1.flush(30);
+  const env2 = createEnv(EXT, { quiet: true, store: env1.store, now: env1.now() + 3600e3, axiosGet: commentPages(users, 50) });
+  const calls = [];
+  env2.setFetch(async (url) => { calls.push(nameOf(url)); return webProfile(users)(nameOf(url)); });
+  const vm2 = commentVm(env2, 'HE');
+  const t0 = env2.now();
+  vm2.startLoadAllData();
+  await env2.run(3000, () => vm2.isComplete);
+  await env2.flush(30);
+  assert.equal(vm2.isComplete, true);
+  assert.equal(calls.length, 0);
+  assert.ok(env2.now() - t0 < 5 * 10000, 'sem esperar 10 s por linha: ' + (env2.now() - t0) + ' ms');
+});
+
+test('Comment 15.3: cursor repetido ou ausente encerra a lista e as consultas de e-mail começam', async () => {
+  for (const stuck of ['repetido', 'ausente']) {
+    const users = commenters(6);
+    let pages = 0;
+    const env = createEnv(EXT, { quiet: true, axiosGet: (url) => {
+      if (url.indexOf('/comments/') < 0) return Promise.reject(new Error('unexpected ' + url));
+      pages++;
+      const cursor = decodeURIComponent(url.split('min_id=')[1] || '');
+      const slice = cursor ? users.slice(3) : users.slice(0, 3);
+      // has_more stays true; the next cursor repeats ('c1' again) or never comes.
+      return Promise.resolve({ data: { status: 'ok', comments: slice.map((u) => ({ user: u })), next_min_id: stuck === 'repetido' ? 'c1' : '', has_more: true, comment_count: 6 } });
+    } });
+    const calls = [];
+    env.setFetch(async (url) => { calls.push(nameOf(url)); return webProfile(users)(nameOf(url)); });
+    const vm = commentVm(env, 'HS' + stuck);
+    vm.startLoadAllData();
+    await env.run(5000, () => vm.isComplete);
+    await env.flush(30);
+    assert.equal(vm.isComplete, true, stuck + ': extração conclui');
+    assert.ok(pages <= 2, stuck + ': a lista não fica em laço (' + pages + ' páginas)');
+    assert.equal(calls.length, stuck === 'repetido' ? 6 : 3, stuck + ': todos os listados consultados');
+  }
+});
+
+test('Comment 15.3: retomada cuja lista falha no meio não encolhe os comentaristas salvos', async () => {
+  const users = commenters(150);
+  const profile = webProfile(users);
+  // Session 1: the whole list (3 pages) is saved, then a 429 on the first check.
+  const env1 = createEnv(EXT, { quiet: true, axiosGet: commentPages(users, 50) });
+  env1.setFetch(async () => rate429());
+  const vm1 = commentVm(env1, 'H7');
+  vm1.startLoadAllData();
+  await env1.run(3000, () => vm1.isPaused);
+  await env1.flush(50);
+  assert.equal((env1.store.extract_list_H7 || []).length, 150);
+  // Session 2 (resume, after the pause): page 1 answers, page 2 is refused (403).
+  const pages = commentPages(users, 50);
+  const env2 = createEnv(EXT, { quiet: true, store: env1.store, now: env1.now() + 2 * 3600e3, axiosGet: (url, cfg) => {
+    if (/min_id=c1/.test(url)) return Promise.reject(Object.assign(new Error('Request failed with status code 403'), { response: { status: 403, data: { status: 'fail', message: 'login_required' } } }));
+    return pages(url, cfg);
+  } });
+  const calls = [];
+  env2.setFetch(async (url) => { calls.push(nameOf(url)); return profile(nameOf(url)); });
+  const last = env1.historyCalls[env1.historyCalls.length - 1] || {};
+  env2.fa20.d = async () => ({ id: 'H7', get: (k) => ({ token: 't', updateTimes: 1, scrapedCount: last.scrapedCount || 0, cursorScrapedCount: last.cursorScrapedCount || 0,
+    count: last.count || 0, lastCursor: last.lastCursor || '', customUserList: '' }[k]) });
+  const vm2 = env2.instance({ type: '4', ins: 'POST', history: 'H7' });
+  commentSetup(vm2);
+  vm2.isPaused = false;
+  vm2.startWorking();
+  await env2.run(3000, () => vm2.isPaused && !vm2.detailCycle);
+  await env2.flush(50);
+  const stored = env2.store.extract_list_H7 || [];
+  assert.equal(calls.length, 0, 'lista incompleta: nenhuma consulta de e-mail');
+  assert.equal(stored.length, 150, 'os 150 comentaristas continuam salvos (' + stored.length + ')');
+  assert.equal(new Set(stored.map((r) => r.userName)).size, 150, 'sem duplicar');
+});

@@ -183,12 +183,9 @@ const SCENARIOS = {
     };
     const o = await open(extDir, 'omit', { comments, profiles });
     await H.clickButton(o.page, 'Iniciar');
-    const s = await H.waitFor(o.page, (x) => x.rows.length === 5 && x.isPaused && !x.detailCycle && profileReqs(o.log).length >= 1 && Date.now() - profileReqs(o.log).slice(-1)[0].t > 25000, { timeout: 160000, every: 2000 });
+    const s = await H.waitFor(o.page, (x) => (x.rows.length === 5 && x.rows.every((r) => r.detailLoaded) && settled(x)) || (x.rows.length === 5 && x.isPaused && !x.detailCycle && profileReqs(o.log).length >= 1 && Date.now() - profileReqs(o.log).slice(-1)[0].t > 25000), { timeout: 200000, every: 2000 });
     const reqsBefore = profileReqs(o.log).length;
-    const continueClicked = await H.clickButton(o.page, 'Continue').catch(() => false);
-    await o.page.waitForTimeout(4000);
-    const toasts = (await H.snapshot(o.page)).toasts;
-    const reqsAfterContinue = profileReqs(o.log).length;
+    const continueClicked = false, toasts = [], reqsAfterContinue = reqsBefore;
     await o.page.reload();
     await o.page.waitForTimeout(4000);
     const afterReload = await H.snapshot(o.page);
@@ -199,7 +196,7 @@ const SCENARIOS = {
     if (await probeInput.count()) {
       await probeInput.fill('@controle_loja');
       await H.clickButton(o.page, 'Verificar 1 perfil');
-      probe = await H.waitFor(o.page, (x) => profileReqs(o.log).some((e) => e.username === 'controle_loja') && !/Consultando/.test(x.bodyText), { timeout: 40000 });
+      probe = await H.waitFor(o.page, (x) => profileReqs(o.log).some((e) => e.username === 'controle_loja') && x.notifications.some((n) => /Diagnóstico de 1 consulta/.test(n)), { timeout: 60000 });
     }
     const startEnabledAfterProbe = await o.page.locator('button', { hasText: 'Iniciar' }).first().isEnabled().catch(() => null);
     const diag = await o.page.locator('textarea').first().inputValue().catch(() => '');
@@ -225,7 +222,7 @@ const SCENARIOS = {
     const profiles = { pessoal_r: F.personalOmitted('pessoal_r', 81), loja_r1: F.businessWithheld('loja_r1', 82), loja_r2: F.businessWithheld('loja_r2', 83), loja_r3: F.businessWithheld('loja_r3', 84), loja_r4: F.businessWithheld('loja_r4', 85) };
     const o = await open(extDir, 'ret', { comments, profiles });
     await H.clickButton(o.page, 'Iniciar');
-    const s = await H.waitFor(o.page, (x) => x.rows.length === 5 && x.isPaused && !x.detailCycle && profileReqs(o.log).length >= 4 && Date.now() - profileReqs(o.log).slice(-1)[0].t > 25000, { timeout: 160000, every: 2000 });
+    const s = await H.waitFor(o.page, (x) => (x.rows.length === 5 && x.rows.every((r) => r.detailLoaded) && settled(x)) || (x.rows.length === 5 && x.isPaused && !x.detailCycle && profileReqs(o.log).length >= 4 && Date.now() - profileReqs(o.log).slice(-1)[0].t > 25000), { timeout: 200000, every: 2000 });
     const xlsx = await H.exportXlsxSheets(o.page, 'all');
     await o.page.reload();
     await o.page.waitForTimeout(4000);
@@ -650,6 +647,42 @@ const SCENARIOS = {
     await ctx.close();
     return { scn, s: after, first, reopened, startEnabled, reqsAfter: profileReqs(log).length - before, diag, log, errors };
   },
+  async comentarios_primeiro(extDir, label) {
+    // 7 comentaristas em 3 páginas; o 2º perfil recebe 429. A lista inteira vem antes de qualquer consulta.
+    const scn = label + ':comentarios_primeiro';
+    const comments = Array.from({ length: 7 }, (_, i) => ({ pk: 120 + i, username: 'pag_' + i }));
+    const profiles = { pag_0: F.businessFound('pag_0', 120, 'p0@loja.com'), pag_1: F.rate429(300) };
+    for (let i = 2; i < 7; i++) profiles['pag_' + i] = F.businessFound('pag_' + i, 120 + i, 'p' + i + '@loja.com');
+    const o = await open(extDir, 'pag', { comments, profiles, commentPageSize: 3 });
+    await H.clickButton(o.page, 'Iniciar');
+    let s = await H.waitFor(o.page, (x) => profileReqs(o.log).length >= 2 && x.isPaused && !x.detailCycle, { timeout: 180000, every: 1000 });
+    await o.page.waitForTimeout(20000); // nenhuma repetição automática
+    s = await H.snapshot(o.page);
+    const csvAll = await H.exportCsv(o.page, 'all');
+    await o.ctx.close();
+    return { scn, s, csvAll, log: o.log, errors: o.consoleErrors };
+  },
+  async cache_entre_extracoes(extDir, label) {
+    // 2ª extração (outro post, outra aba) com os mesmos comentaristas: nenhuma consulta repetida.
+    const scn = label + ':cache_entre_extracoes';
+    const comments = [{ pk: 131, username: 'cache_loja' }, { pk: 132, username: 'cache_pessoa' }];
+    const profiles = { cache_loja: F.businessFound('cache_loja', 131, 'cache@loja.com'), cache_pessoa: F.personalOmitted('cache_pessoa', 132) };
+    const o = await open(extDir, 'cch', { comments, profiles });
+    await H.clickButton(o.page, 'Iniciar');
+    const s1 = await H.waitFor(o.page, (x) => x.rows.length === 2 && x.rows.every((r) => r.detailLoaded) && x.isComplete, { timeout: 120000, every: 2000 });
+    const reqs1 = profileReqs(o.log).length;
+    const p2 = await o.ctx.newPage();
+    p2.on('pageerror', (e) => o.consoleErrors.push(String(e)));
+    await p2.goto(`chrome-extension://${o.id}/dashboard.html#/?ins=POSTTEST2&type=4`);
+    await p2.waitForTimeout(2500);
+    const started = Date.now();
+    await H.clickButton(p2, 'Iniciar');
+    const s = await H.waitFor(p2, (x) => x.rows.length === 2 && x.rows.every((r) => r.detailLoaded) && x.isComplete, { timeout: 90000, every: 500 });
+    const seconds = (Date.now() - started) / 1000;
+    const reqs2 = profileReqs(o.log).length - reqs1;
+    await o.ctx.close();
+    return { scn, s, s1, reqs1, reqs2, seconds, log: o.log, errors: o.consoleErrors };
+  },
   async identidade(extDir, label) {
     const scn = label + ':identidade';
     const comments = [{ pk: 41, username: 'renomeado' }, { pk: 42, username: 'loja_ok' }];
@@ -711,14 +744,16 @@ function assess(label, r) {
   }
   if (/omitidos_profissionais/.test(scn)) {
     console.log('--- diagnóstico copiado (simulado) ---\n' + r.diag + '\n---');
-    check(scn, 'pessoal não conta; para no 3º profissional omitido', profileReqs(log).filter((e) => e.username !== 'controle_loja').length === 4 && !profileReqs(log).some((e) => e.username === 'loja_om4'), profileReqs(log).map((e) => e.username));
-    check(scn, 'status: pessoal / omitido x3', byUser.pessoal_x.status === 'not_professional' && ['loja_om1', 'loja_om2', 'criador_om'].every((u) => byUser[u].status === 'omitted'));
+    check(scn, '4 profissionais sem campo + 1 pessoal: a fila NÃO para (5 consultas) e conclui', profileReqs(log).filter((e) => e.username !== 'controle_loja').map((e) => e.username).join() === 'pessoal_x,loja_om1,loja_om2,criador_om,loja_om4' && s.isComplete === true, { reqs: profileReqs(log).map((e) => e.username), done: s.isComplete });
+    check(scn, 'status: pessoal / omitido x4', byUser.pessoal_x.status === 'not_professional' && ['loja_om1', 'loja_om2', 'criador_om', 'loja_om4'].every((u) => byUser[u].status === 'omitted'));
     check(scn, 'e-mail da bio não usado', !s.rows.some((x) => x.email));
-    check(scn, 'decisão persistida após recarga', r.afterReload.commercialContactUnavailable === true && r.startEnabledAfterReload === false);
-    check(scn, 'Continue bloqueado explica o motivo e não consulta', r.continueClicked && r.toasts.some((t) => /Fila encerrada pelo diagnóstico automático/.test(t)) && r.reqsAfterContinue === r.reqsBefore, { toasts: r.toasts, before: r.reqsBefore, after: r.reqsAfterContinue });
-    check(scn, 'verificação manual de 1 perfil executou 1 consulta', profileReqs(log).filter((e) => e.username === 'controle_loja').length === 1);
-    check(scn, 'campo presente na verificação reabre a fila', r.probe && r.probe.commercialContactUnavailable === false && r.startEnabledAfterProbe === true);
-    check(scn, 'diagnóstico mostra HTTP 200, campo e tipo', /HTTP 200/.test(r.diag) && /business_email=valid/.test(r.diag) && /business/.test(r.diag), r.diag.slice(0, 400));
+    check(scn, 'nenhuma parada salva: após recarregar, Iniciar habilitado', r.afterReload.commercialContactUnavailable === false && r.startEnabledAfterReload === true, { unavailable: r.afterReload.commercialContactUnavailable, start: r.startEnabledAfterReload });
+    check(scn, 'diagnóstico de 1 clique executou 1 consulta', profileReqs(log).filter((e) => e.username === 'controle_loja').length === 1);
+    const card = r.probe ? (r.probe.notifications.find((n) => /Diagnóstico de 1 consulta/.test(n)) || '') : '';
+    check(scn, 'diagnóstico de 1 clique mostra rota, HTTP 200 e caminhos de e-mail', /@controle_loja/.test(card) && /GET \/api\/v1\/users\/web_profile_info\//.test(card) && /HTTP 200/.test(card) && /data\.user\.business_email=texto/.test(card) && /Contato público do Instagram/.test(card), card.slice(0, 400));
+    check(scn, 'diagnóstico de 1 clique não mostra o e-mail, cookie nem token', !/vendas@controle|csrf|sessionid|ds_user_id|cookie|token/i.test(card), card.slice(0, 200));
+    check(scn, 'diagnóstico mostra HTTP 200, campo e tipo', /HTTP 200/.test(r.diag) && /business_email=valid/.test(r.diag) && /business/.test(r.diag) && /campos de e-mail recebidos: [^\n]*data\.user\.business_email=texto/.test(r.diag), r.diag.slice(0, 400));
+    check(scn, 'diagnóstico não fala em contato retido', !/retid|retém/i.test(r.diag));
     check(scn, 'verificação não adiciona linha à tabela', r.probe && r.probe.rows.length === r.afterReload.rows.length, { before: r.afterReload.rows.length, after: r.probe && r.probe.rows.length });
   }
   if (/falha_/.test(scn)) {
@@ -880,14 +915,31 @@ function assess(label, r) {
   }
   if (/retido_pela_web/.test(scn)) {
     const users = profileReqs(log).map((e) => e.username);
-    check(scn, 'encerra no 3º comercial com contato retido; pessoal não conta', users.join() === 'pessoal_r,loja_r1,loja_r2,loja_r3', users);
-    check(scn, 'status "não entregue pela consulta web" nos retidos', ['loja_r1', 'loja_r2', 'loja_r3'].every((u) => byUser[u].status === 'not_delivered'));
+    check(scn, 'CALL com e-mail nulo não para a fila: 5 consultas e extração concluída', users.join() === 'pessoal_r,loja_r1,loja_r2,loja_r3,loja_r4' && s.isComplete === true, { users, done: s.isComplete });
+    check(scn, 'status "Campo comercial vazio" (sem rótulo de retenção)', ['loja_r1', 'loja_r2', 'loja_r3', 'loja_r4'].every((u) => byUser[u].status === 'empty' && byUser[u].text === 'Campo comercial vazio'), s.rows.map((x) => [x.user, x.status, x.text]));
     check(scn, 'e-mail da bio não usado', !s.rows.some((x) => x.email));
-    check(scn, 'aviso automático explica a retenção', s.notifications.some((n) => /retém esse contato|retém o contato/.test(n)), s.notifications);
-    check(scn, 'decisão persiste após recarga (Iniciar desabilitado)', r.afterReload.commercialContactUnavailable === true && r.startEnabledAfterReload === false && /retém o contato/.test(r.afterReload.bodyText));
-    const lines = JSON.stringify(r.xlsx['Respostas reais'] || []);
-    check(scn, 'XLSX traz decisão e retenção no diagnóstico', /contato retido pela consulta web/.test(lines) && /loja_r3/.test(lines), lines.slice(0, 300));
-    check(scn, 'nenhuma consulta após o encerramento (inclusive após recarregar)', profileReqs(log).length === 4);
+    check(scn, 'nenhum aviso ou texto de contato retido', !s.notifications.some((n) => /retém|retid/i.test(n)) && !/retém|retid/i.test(s.bodyText), s.notifications);
+    const lines = JSON.stringify(r.xlsx || {});
+    check(scn, 'XLSX sem conclusão de retenção', !/retid|retém|não entregue/i.test(lines) && /loja_r4/.test(lines), lines.slice(0, 300));
+    check(scn, 'cada perfil consultado uma única vez', profileReqs(log).every((e) => e.n === 1));
+  }
+  if (/comentarios_primeiro/.test(scn)) {
+    const pages = log.filter((e) => e.kind === 'comments'), first = profileReqs(log)[0];
+    check(scn, 'as 3 páginas de comentários vêm antes da 1ª consulta de perfil', pages.length === 3 && first && pages.every((p) => p.t <= first.t), { pages: pages.map((p) => p.t), first: first && first.t });
+    check(scn, '429 no 2º perfil: 2 consultas no total, nenhuma repetição automática', profileReqs(log).map((e) => e.username).join() === 'pag_0,pag_1' && s.isPaused, profileReqs(log).map((e) => e.username));
+    const stored = Object.entries(s.storage).filter(([k]) => /^extract_list_/.test(k)).map(([, v]) => v)[0] || [];
+    check(scn, 'os 7 comentaristas continuam na tabela e no histórico local depois do 429', s.rows.length === 7 && stored.length === 7, { rows: s.rows.length, stored: stored.length });
+    check(scn, 'e-mail do 1º mantido; 2º marcado com 429; demais aguardando', byUser.pag_0 && byUser.pag_0.email === 'p0@loja.com' && byUser.pag_1.failure && byUser.pag_1.failure.code === 'rate_limit' && [2, 3, 4, 5, 6].every((i) => !byUser['pag_' + i].detailLoaded), s.rows.map((x) => [x.user, x.status, x.failure && x.failure.code]));
+    const until = Number(s.storage.ig_contact_cooldown_until) || 0, second = profileReqs(log)[1];
+    check(scn, 'pausa salva pelo Retry-After (300 s)', second && Math.abs(until - (second.t + 300000)) < 5000, { until });
+    check(scn, 'CSV exporta os 7 comentaristas', r.csvAll.trim().split('\n').length === 8, r.csvAll.split('\n').length);
+  }
+  if (/cache_entre_extracoes/.test(scn)) {
+    check(scn, '1ª extração: 2 consultas', r.reqs1 === 2, r.reqs1);
+    check(scn, '2ª extração (outro post): 0 consultas, mesmos resultados do cache', r.reqs2 === 0 && byUser.cache_loja && byUser.cache_loja.email === 'cache@loja.com' && byUser.cache_loja.status === 'found' && byUser.cache_pessoa.status === 'not_professional', { reqs2: r.reqs2, rows: s.rows.map((x) => [x.user, x.status, x.email]) });
+    check(scn, '2ª extração conclui sem esperar 10 s por perfil', r.seconds < 20, r.seconds);
+    const cache = s.storage.ig_contact_profile_cache_v15 || {};
+    check(scn, 'cache salvo no navegador por perfil', cache['instagram_web_profile_info:cache_loja'] && cache['instagram_web_profile_info:cache_pessoa'], Object.keys(cache));
   }
   if (/verificacao_429/.test(scn)) {
     const until = Number(s.storage.ig_contact_cooldown_until) || 0, reqAt = profileReqs(log)[0] ? profileReqs(log)[0].t : 0;

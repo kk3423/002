@@ -1,9 +1,12 @@
-Autland IG Extractor — PATCHED 15.2 — Resultados dos testes (2026-10-05 UTC)
+Autland IG Extractor — PATCHED 15.3 — Resultados dos testes (2026-10-05 UTC)
 
-RESULTADOS REAIS: só os dois testes feitos pelo usuário (seção 6). Este ambiente não
+RESULTADOS REAIS: só os três testes feitos pelo usuário (seção 8). Este ambiente não
 consulta o Instagram: a política de rede bloqueia instagram.com e não há sessão.
-TODO o resto abaixo é SIMULADO e rodou sobre a pasta extraída do ZIP final:
-  62a01fa1bf85a6a424264501fcf314e36d267a68642acc121e0582a7471b3196  Autland-IG-Extractor-PATCHED-15.2.zip
+TODO o resto abaixo é SIMULADO. Sintaxe, unitários e dados rodaram sobre a pasta extraída do ZIP final.
+O ponta a ponta no Chromium rodou sobre a extração do build testado, que difere do ZIP final só em
+LEIA-ME.txt e PATCH_NOTES.txt (conferido com diff -rq: os 32 demais arquivos são idênticos).
+ZIP final:
+  970f3c24846b77665319a5cb4fec6a8edb1697d7801efc44b0258533b146e67c  Autland-IG-Extractor-PATCHED-15.3.zip
 
 ==============================================================================
 1. SINTAXE
@@ -23,14 +26,14 @@ OK  request-pacing.js
 OK  manifest.json e _locales (JSON válido)
 
 ==============================================================================
-2. UNITÁRIOS DO PARSER, DO LEITOR E DA GRAVAÇÃO DA PAUSA (simulado)
+2. UNITÁRIOS DO PARSER E DO LEITOR (simulado)
 ==============================================================================
 ✔ parser: business_email válido = found
 ✔ parser: public_email tem prioridade sobre business_email
 ✔ parser: conta pessoal nunca vira contato (com ou sem campo)
 ✔ parser: vazio, nulo e false = empty (campo retornado)
-✔ parser: "não entregue" só quando o perfil anuncia contato; sem método é "vazio"
-✔ parser: contato retido = botão CALL/TEXT ativo com e-mail e telefone nulos
+✔ parser: e-mail nulo é "vazio" mesmo com botão CALL/TEXT (sem inferência de retenção)
+✔ parser: nenhuma combinação de flags marca contato retido
 ✔ parser: oculto (should_show_public_contacts=false) não coleta mesmo com valor
 ✔ parser: campo ausente em profissional = omitted; tipo desconhecido também
 ✔ parser: formato inválido = invalid
@@ -46,17 +49,15 @@ OK  manifest.json e _locales (JSON válido)
 ✔ reader: pausa ativa impede qualquer consulta (inclusive verificação manual)
 ✔ reader: intervalo mínimo de 10 s entre consultas, serializadas
 ✔ reader: evidência sanitizada (campos, flags, e-mail mascarado)
-✔ reader: pessoais sem campo não bloqueiam; 3 profissionais omitidos bloqueiam
+✔ reader: perfis sem e-mail (pessoais, omitidos, vazios, ocultos) nunca param a fila
 ✔ reader: contato oculto/sem campo não conta como consulta incompatível
 ✔ reader: um perfil com o campo impede a parada por omissão
-✔ reader: verificação manual reavalia a decisão com evidência real
+✔ reader: parada por rota salva pela 14-15.2 não bloqueia mais a fila nem a verificação
 ✔ reader: perfil inexistente/404/divergente = resultado por perfil (fila segue)
 ✔ reader: falhas de acesso distintas param sem nova tentativa
 ✔ reader: cancelamento após a resposta guarda em cache (retomada não repete consulta)
 ✔ reader: nome inválido não consulta; evidência limitada a 20
-✔ reader: 3 comerciais com contato retido encerram a rota (motivo withheld)
-✔ reader: um e-mail entregue impede o encerramento por retenção
-✔ reader: verificação manual com e-mail entregue reabre rota encerrada por retenção
+✔ reader: comerciais com CALL/TEXT e e-mail nulo seguem a fila como "vazio"
 ✔ reader: 429 repetido sinaliza recusa da rota mas NUNCA bloqueia a fila
 ✔ reader: HTTP 400 conta como recusa; 403 não
 ✔ reader: uma resposta de perfil real zera as recusas
@@ -65,14 +66,24 @@ OK  manifest.json e _locales (JSON válido)
 ✔ reader: divergência de identidade em cache não é servida ao perfil retornado
 ✔ reader: mensagem do Instagram nunca chega como HTML às notificações
 ✔ reader: 404 conta como resposta da consulta, mas não como perfil entregue
-✔ reader: a parada por decisão de rota informa o motivo
+✔ reader: não existe mais parada por decisão de rota (blockReason sempre vazio)
 ✔ pausa: duas abas gravando ao mesmo tempo nunca encurtam a pausa (com a trava)
 ✔ pausa: sem a trava, a mesma corrida perde a pausa maior (defeito corrigido)
 ✔ pausa: uma pausa salva maior nunca é reduzida por um Retry-After menor
 ✔ pausa: falha passageira do armazenamento é repetida 1 vez; falha persistente é reportada
 ✔ leitor: 429 com armazenamento quebrado continua sendo 429 e registra pausa NÃO salva
-ℹ tests 46
-ℹ pass 46
+✔ emailPaths: lista caminhos e tipos de todos os campos de e-mail, sem valores
+✔ leitor: evidência registra os caminhos de e-mail recebidos, sem valores
+✔ cache persistente: o mesmo perfil não é consultado de novo em outra extração
+✔ cache persistente: id diferente, validade vencida e verificação manual consultam de novo
+✔ cache persistente: indisponível vale 3 dias; divergência de identidade não é guardada
+✔ cache persistente: limite de 3000 perfis descarta os mais antigos
+✔ cache persistente: falha do armazenamento do cache não muda o resultado
+✔ ritmo adaptativo: 429 dobra o intervalo (até 2 min); 5 respostas seguidas reduzem 20%
+✔ ritmo adaptativo: intervalo salvo maior vale para todas as abas, sem consulta durante a espera
+✔ ritmo adaptativo: a pausa 429 continua valendo depois do intervalo
+ℹ tests 54
+ℹ pass 54
 ℹ fail 0
 
 ==============================================================================
@@ -90,8 +101,14 @@ OK  manifest.json e _locales (JSON válido)
 ✔ Perfil 404 e erro persistente fora do Comment: registrados, sem travar a fila
 ✔ Índice do histórico com 2 dashboards abertos: nenhum apaga a data mais nova do outro
 ✔ Exportações: mesmas colunas em todos os modos; abas de diagnóstico só no Comment
-ℹ tests 12
-ℹ pass 12
+✔ Comment 15.3: a lista inteira é lida e salva antes da 1ª consulta de e-mail; 429 preserva os comentaristas
+✔ Comment 15.3: perfil já consultado em outra extração não é consultado de novo
+✔ Comment 15.3: perfis comerciais sem e-mail (CALL/TEXT ou campo omitido) não param a fila
+✔ Comment 15.3: perfis vindos do cache não esperam o intervalo de 10 s (nenhuma consulta)
+✔ Comment 15.3: cursor repetido ou ausente encerra a lista e as consultas de e-mail começam
+✔ Comment 15.3: retomada cuja lista falha no meio não encolhe os comentaristas salvos
+ℹ tests 18
+ℹ pass 18
 ℹ fail 0
 
 ==============================================================================
@@ -103,404 +120,426 @@ lote 3: 44 ok / 0 falhas  (falha_acesso:http403 falha_acesso:redirect falha_aces
 lote 4: 70 ok / 0 falhas  (seguidores seguidores_429 seguindo curtidas hashtag)
 lote 5: 70 ok / 0 falhas  (local lista lista_inexistente dj_filtro seguidores_pausa_salva)
 lote 6: 55 ok / 0 falhas  (retomada_comment seguidores_falhas pausa_1259_1313 armazenamento_vazio_1313)
-TOTAL: 359 ok / 0 falhas
+lote 7: 20 ok / 0 falhas  (comentarios_primeiro cache_entre_extracoes)
+TOTAL: 379 ok / 0 falhas
 
-PASS  v15.2:tipos_mistos  não inicia sozinho
-PASS  v15.2:pausa_compartilhada  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:pausa_compartilhada  nenhum host externo não simulado
-PASS  v15.2:pausa_compartilhada  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:pausa_compartilhada  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:pausa_compartilhada  sem erro JavaScript na página
-PASS  v15.2:pausa_compartilhada  nenhuma consulta de perfil durante a pausa de outro dashboard
-PASS  v15.2:pausa_compartilhada  nenhuma leitura de comentários durante a pausa
-PASS  v15.2:pausa_compartilhada  aviso explica a pausa salva
-PASS  v15.2:pausa_compartilhada  pausa salva preservada e refletida na tela
-PASS  v15.2:primeiro_429  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:primeiro_429  nenhum host externo não simulado
-PASS  v15.2:primeiro_429  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:primeiro_429  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:primeiro_429  sem erro JavaScript na página
-PASS  v15.2:primeiro_429  apenas 1 consulta e nenhuma repetição automática
-PASS  v15.2:primeiro_429  pausa persistida conforme Retry-After/60 min
-PASS  v15.2:primeiro_429  após recarregar: pausa ativa e Iniciar desabilitado
-PASS  v15.2:primeiro_429  aviso de HTTP 429 exibido
-PASS  v15.2:primeiro_429  linha marcada com falha de acesso 429 (não como e-mail ausente)
-PASS  v15.2:primeiro_429  contador mostra encontrados x consultados (2 encontrados, 0 consultados)
-PASS  v15.2:omitidos_profissionais  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:omitidos_profissionais  nenhum host externo não simulado
-PASS  v15.2:omitidos_profissionais  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:omitidos_profissionais  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:omitidos_profissionais  sem erro JavaScript na página
-PASS  v15.2:omitidos_profissionais  pessoal não conta; para no 3º profissional omitido
-PASS  v15.2:omitidos_profissionais  status: pessoal / omitido x3
-PASS  v15.2:omitidos_profissionais  e-mail da bio não usado
-PASS  v15.2:omitidos_profissionais  decisão persistida após recarga
-PASS  v15.2:omitidos_profissionais  Continue bloqueado explica o motivo e não consulta
-PASS  v15.2:omitidos_profissionais  verificação manual de 1 perfil executou 1 consulta
-PASS  v15.2:omitidos_profissionais  campo presente na verificação reabre a fila
-PASS  v15.2:omitidos_profissionais  diagnóstico mostra HTTP 200, campo e tipo
-PASS  v15.2:omitidos_profissionais  verificação não adiciona linha à tabela
-PASS  v15.2:tipos_mistos  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:tipos_mistos  nenhum host externo não simulado
-PASS  v15.2:tipos_mistos  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:tipos_mistos  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:tipos_mistos  sem erro JavaScript na página
-PASS  v15.2:tipos_mistos  status pessoal_sem_campo = not_professional
-PASS  v15.2:tipos_mistos  status loja_com_email = found
-PASS  v15.2:tipos_mistos  status criador_nulo = empty
-PASS  v15.2:tipos_mistos  status loja_oculta = hidden
-PASS  v15.2:tipos_mistos  status loja_vazia = empty
-PASS  v15.2:tipos_mistos  status conta_apagada = profile_unavailable
-PASS  v15.2:tipos_mistos  status pessoal_nulo = not_professional
-PASS  v15.2:tipos_mistos  fila não parou por perfil pessoal/omitido
-PASS  v15.2:tipos_mistos  cada perfil consultado uma única vez
-PASS  v15.2:tipos_mistos  único e-mail = campo comercial (bio ignorada)
-PASS  v15.2:tipos_mistos  e-mail oculto não coletado
-PASS  v15.2:tipos_mistos  textos distintos: vazio/oculto/pessoal/indisponível/encontrado
-PASS  v15.2:tipos_mistos  sem método de contato anunciado, nada é rotulado como retido
-PASS  v15.2:tipos_mistos  perfil apagado preserva nome do comentário
-PASS  v15.2:tipos_mistos  CSV de e-mails: coluna "E-mail comercial" só com o contato comercial
-PASS  v15.2:tipos_mistos  CSV completo: coluna de e-mail sem bio/oculto/pessoal
-PASS  v15.2:tipos_mistos  CSV completo tem 7 linhas e coluna de status
-PASS  v15.2:tipos_mistos  XLSX: aba de dados + 2 abas de diagnóstico automáticas
-PASS  v15.2:tipos_mistos  XLSX diagnóstico: campo omitido x nulo x vazio por perfil
-PASS  v15.2:tipos_mistos  XLSX diagnóstico: sinal de contato oculto registrado
-PASS  v15.2:tipos_mistos  XLSX diagnóstico: sem e-mail completo nas abas de diagnóstico
-PASS  v15.2:tipos_mistos  XLSX dados: coluna E-mail comercial só com o contato do campo
-PASS  v15.2:tipos_mistos  histórico local salvo (extract_list_*)
-PASS  v15.2:tipos_mistos  evidência sanitizada registrada (sem e-mail completo)
-PASS  v15.2:retido_pela_web  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:retido_pela_web  nenhum host externo não simulado
-PASS  v15.2:retido_pela_web  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:retido_pela_web  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:retido_pela_web  sem erro JavaScript na página
-PASS  v15.2:retido_pela_web  encerra no 3º comercial com contato retido; pessoal não conta
-PASS  v15.2:retido_pela_web  status "não entregue pela consulta web" nos retidos
-PASS  v15.2:retido_pela_web  e-mail da bio não usado
-PASS  v15.2:retido_pela_web  aviso automático explica a retenção
-PASS  v15.2:retido_pela_web  decisão persiste após recarga (Iniciar desabilitado)
-PASS  v15.2:retido_pela_web  XLSX traz decisão e retenção no diagnóstico
-PASS  v15.2:retido_pela_web  nenhuma consulta após o encerramento (inclusive após recarregar)
-PASS  v15.2:verificacao_429  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:verificacao_429  nenhum host externo não simulado
-PASS  v15.2:verificacao_429  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:verificacao_429  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:verificacao_429  sem erro JavaScript na página
-PASS  v15.2:verificacao_429  verificação recebeu 429: 1 consulta, pausa salva pelo Retry-After
-PASS  v15.2:verificacao_429  durante a pausa: verificação e Iniciar desabilitados
-PASS  v15.2:verificacao_429  nenhuma consulta automática depois do 429
-PASS  v15.2:verificacao_429  diagnóstico registra HTTP 429 e Retry-After
-PASS  v15.2:identidade  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:identidade  nenhum host externo não simulado
-PASS  v15.2:identidade  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:identidade  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:identidade  sem erro JavaScript na página
-PASS  v15.2:identidade  perfil divergente marcado e não aplicado
-PASS  v15.2:identidade  fila segue para o próximo perfil
-PASS  v15.2:primeiro_429_sem_retry_after  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:primeiro_429_sem_retry_after  nenhum host externo não simulado
-PASS  v15.2:primeiro_429_sem_retry_after  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:primeiro_429_sem_retry_after  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:primeiro_429_sem_retry_after  sem erro JavaScript na página
-PASS  v15.2:primeiro_429_sem_retry_after  apenas 1 consulta e nenhuma repetição automática
-PASS  v15.2:primeiro_429_sem_retry_after  pausa persistida conforme Retry-After/60 min
-PASS  v15.2:primeiro_429_sem_retry_after  após recarregar: pausa ativa e Iniciar desabilitado
-PASS  v15.2:primeiro_429_sem_retry_after  aviso de HTTP 429 exibido
-PASS  v15.2:primeiro_429_sem_retry_after  linha marcada com falha de acesso 429 (não como e-mail ausente)
-PASS  v15.2:primeiro_429_sem_retry_after  contador mostra encontrados x consultados (2 encontrados, 0 consultados)
-PASS  v15.2:prova_persistente  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:prova_persistente  nenhum host externo não simulado
-PASS  v15.2:prova_persistente  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:prova_persistente  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:prova_persistente  sem erro JavaScript na página
-PASS  v15.2:prova_persistente  prova real registrada no schema
-PASS  v15.2:prova_persistente  e-mail da prova fica mascarado no schema
-PASS  v15.2:prova_persistente  prova sobrevive ao log rolante e à recarga
-PASS  v15.2:prova_persistente  diagnóstico confirma a prova após recarga
-PASS  v15.2:prova_persistente  fila concluída (não ficou em laço)
-PASS  v15.2:lista_sem_retry  nenhum host externo não simulado
-PASS  v15.2:lista_sem_retry  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:lista_sem_retry  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:lista_sem_retry  sem erro JavaScript na página
-PASS  v15.2:lista_sem_retry  403 na lista pausa sem repetição automática
-PASS  v15.2:lista_sem_retry  mensagem em português explica a pausa
-PASS  v15.2:lista_sem_retry  nenhuma consulta de perfil disparada
-PASS  v15.2:export_vazio  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:export_vazio  nenhum host externo não simulado
-PASS  v15.2:export_vazio  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:export_vazio  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:export_vazio  sem erro JavaScript na página
-PASS  v15.2:export_vazio  linhas carregadas sem nenhuma consulta de perfil concluída
-PASS  v15.2:export_vazio  XLSX com as 3 abas mesmo sem diagnóstico
-PASS  v15.2:export_vazio  aba de diagnóstico lista os 2 perfis com "-" nos campos
-PASS  v15.2:export_vazio  status mostra aguardando consulta
-PASS  v15.2:export_vazio  aba de respostas reais diz que não há prova
-PASS  v15.2:export_vazio  CSV exporta as 2 linhas
-PASS  v15.2:export_vazio  sem erro de página após exportar
-PASS  v15.2:falha_http403  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:falha_http403  nenhum host externo não simulado
-PASS  v15.2:falha_http403  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:falha_http403  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:falha_http403  sem erro JavaScript na página
-PASS  v15.2:falha_http403  parou após 1 consulta, sem repetição automática
-PASS  v15.2:falha_http403  linha marcada com falha (access)
-PASS  v15.2:falha_http403  próximo perfil não consultado
-PASS  v15.2:falha_redirect  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:falha_redirect  nenhum host externo não simulado
-PASS  v15.2:falha_redirect  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:falha_redirect  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:falha_redirect  sem erro JavaScript na página
-PASS  v15.2:falha_redirect  parou após 1 consulta, sem repetição automática
-PASS  v15.2:falha_redirect  linha marcada com falha (redirect)
-PASS  v15.2:falha_redirect  próximo perfil não consultado
-PASS  v15.2:falha_html  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:falha_html  nenhum host externo não simulado
-PASS  v15.2:falha_html  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:falha_html  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:falha_html  sem erro JavaScript na página
-PASS  v15.2:falha_html  parou após 1 consulta, sem repetição automática
-PASS  v15.2:falha_html  linha marcada com falha (invalid_response)
-PASS  v15.2:falha_html  próximo perfil não consultado
-PASS  v15.2:tres_indisponiveis  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:tres_indisponiveis  nenhum host externo não simulado
-PASS  v15.2:tres_indisponiveis  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:tres_indisponiveis  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:tres_indisponiveis  sem erro JavaScript na página
-PASS  v15.2:tres_indisponiveis  pausa após 3 indisponíveis seguidos
-PASS  v15.2:tres_indisponiveis  Continue retoma e segue para o próximo perfil
-PASS  v15.2:tres_indisponiveis  indisponíveis não são consultados de novo
-PASS  v15.2:seguindo  nenhum host externo não simulado
-PASS  v15.2:seguindo  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:seguindo  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:seguindo  sem erro JavaScript na página
-PASS  v15.2:seguindo  lista carregada (2 linhas, sem duplicar autor)
-PASS  v15.2:seguindo  detalhe consultado 1 vez por perfil
-PASS  v15.2:seguindo  e-mails só do contato público (bio, pessoal e oculto fora)
-PASS  v15.2:seguindo  status sgd_loja = found
-PASS  v15.2:seguindo  status sgd_pessoa = not_professional
-PASS  v15.2:seguindo  extração concluída
-PASS  v15.2:seguindo  histórico no servidor atualizado
-PASS  v15.2:seguindo  histórico local salvo (extract_list_*)
-PASS  v15.2:seguindo  CSV de e-mails: coluna "E-mail comercial" correta
-PASS  v15.2:seguindo  CSV completo: todas as linhas e status
-PASS  v15.2:seguindo  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
-PASS  v15.2:seguindo  XLSX: coluna E-mail comercial correta
-PASS  v15.2:seguindo  lista lida de following (não de followers)
-PASS  v15.2:hashtag  nenhum host externo não simulado
-PASS  v15.2:hashtag  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:hashtag  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:hashtag  sem erro JavaScript na página
-PASS  v15.2:hashtag  lista carregada (2 linhas, sem duplicar autor)
-PASS  v15.2:hashtag  detalhe consultado 1 vez por perfil
-PASS  v15.2:hashtag  e-mails só do contato público (bio, pessoal e oculto fora)
-PASS  v15.2:hashtag  status tag_loja = found
-PASS  v15.2:hashtag  status tag_vazia = empty
-PASS  v15.2:hashtag  extração concluída
-PASS  v15.2:hashtag  histórico no servidor atualizado
-PASS  v15.2:hashtag  histórico local salvo (extract_list_*)
-PASS  v15.2:hashtag  CSV de e-mails: coluna "E-mail comercial" correta
-PASS  v15.2:hashtag  CSV completo: todas as linhas e status
-PASS  v15.2:hashtag  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
-PASS  v15.2:hashtag  XLSX: coluna E-mail comercial correta
-PASS  v15.2:seguidores  nenhum host externo não simulado
-PASS  v15.2:seguidores  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:seguidores  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:seguidores  sem erro JavaScript na página
-PASS  v15.2:seguidores  lista de seguidores carregada (3 linhas)
-PASS  v15.2:seguidores  detalhe consultado 1 vez por seguidor
-PASS  v15.2:seguidores  e-mails só de public_email (bio ignorada)
-PASS  v15.2:seguidores  status: encontrado / pessoal / encontrado
-PASS  v15.2:seguidores  telefone público preservado
-PASS  v15.2:seguidores  extração concluída
-PASS  v15.2:seguidores  CSV de e-mails com a coluna certa
-PASS  v15.2:curtidas  nenhum host externo não simulado
-PASS  v15.2:curtidas  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:curtidas  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:curtidas  sem erro JavaScript na página
-PASS  v15.2:curtidas  lista carregada (3 linhas, sem duplicar autor)
-PASS  v15.2:curtidas  detalhe consultado 1 vez por perfil
-PASS  v15.2:curtidas  e-mails só do contato público (bio, pessoal e oculto fora)
-PASS  v15.2:curtidas  status cur_loja = found
-PASS  v15.2:curtidas  status cur_pessoa = not_professional
-PASS  v15.2:curtidas  status cur_oculto = hidden
-PASS  v15.2:curtidas  extração concluída
-PASS  v15.2:curtidas  histórico no servidor atualizado
-PASS  v15.2:curtidas  histórico local salvo (extract_list_*)
-PASS  v15.2:curtidas  CSV de e-mails: coluna "E-mail comercial" correta
-PASS  v15.2:curtidas  CSV completo: todas as linhas e status
-PASS  v15.2:curtidas  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
-PASS  v15.2:curtidas  XLSX: coluna E-mail comercial correta
-PASS  v15.2:curtidas  telefone público preservado
-PASS  v15.2:seguidores_429  nenhum host externo não simulado
-PASS  v15.2:seguidores_429  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:seguidores_429  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:seguidores_429  sem erro JavaScript na página
-PASS  v15.2:seguidores_429  429 respeitado: 2ª tentativa só depois do Retry-After
-PASS  v15.2:seguidores_429  sem martelar: no máximo 2 consultas ao perfil limitado
-PASS  v15.2:seguidores_429  retoma sozinho fora do Comment e conclui
-PASS  v15.2:seguidores_429  pausa compartilhada gravada
-PASS  v15.2:lista  nenhum host externo não simulado
-PASS  v15.2:lista  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:lista  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:lista  sem erro JavaScript na página
-PASS  v15.2:lista  lista carregada (2 linhas, sem duplicar autor)
-PASS  v15.2:lista  detalhe consultado 1 vez por perfil
-PASS  v15.2:lista  e-mails só do contato público (bio, pessoal e oculto fora)
-PASS  v15.2:lista  status lista_loja = found
-PASS  v15.2:lista  status lista_pessoa = not_professional
-PASS  v15.2:lista  extração concluída
-PASS  v15.2:lista  histórico no servidor atualizado
-PASS  v15.2:lista  histórico local salvo (extract_list_*)
-PASS  v15.2:lista  CSV de e-mails: coluna "E-mail comercial" correta
-PASS  v15.2:lista  CSV completo: todas as linhas e status
-PASS  v15.2:lista  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
-PASS  v15.2:lista  XLSX: coluna E-mail comercial correta
-PASS  v15.2:lista  lista lida do storage e enviada ao histórico
-PASS  v15.2:lista  chave temporária da lista removida do storage
-PASS  v15.2:lista  nome -> id resolvido 1 vez por perfil
-PASS  v15.2:dj_filtro  nenhum host externo não simulado
-PASS  v15.2:dj_filtro  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:dj_filtro  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:dj_filtro  sem erro JavaScript na página
-PASS  v15.2:dj_filtro  tarefa conclui com o filtro DJ ligado
-PASS  v15.2:dj_filtro  filtro só afeta a visão (1 lead na tabela, 3 processados)
-PASS  v15.2:dj_filtro  histórico local guarda os 3 perfis
-PASS  v15.2:dj_filtro  histórico no servidor: 3 extraídos, 3 e-mails, concluído
-PASS  v15.2:seguidores_pausa_salva  nenhum host externo não simulado
-PASS  v15.2:seguidores_pausa_salva  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:seguidores_pausa_salva  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:seguidores_pausa_salva  sem erro JavaScript na página
-PASS  v15.2:seguidores_pausa_salva  pausa salva respeitada: nenhuma consulta ao Instagram antes do fim
-PASS  v15.2:seguidores_pausa_salva  dashboard começa pausado com aviso da pausa
-PASS  v15.2:seguidores_pausa_salva  retoma sozinho depois da pausa e conclui
-PASS  v15.2:local  nenhum host externo não simulado
-PASS  v15.2:local  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:local  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:local  sem erro JavaScript na página
-PASS  v15.2:local  lista carregada (3 linhas, sem duplicar autor)
-PASS  v15.2:local  detalhe consultado 1 vez por perfil
-PASS  v15.2:local  e-mails só do contato público (bio, pessoal e oculto fora)
-PASS  v15.2:local  status loc_loja = found
-PASS  v15.2:local  status loc_criador = found
-PASS  v15.2:local  extração concluída
-PASS  v15.2:local  histórico no servidor atualizado
-PASS  v15.2:local  histórico local salvo (extract_list_*)
-PASS  v15.2:local  CSV de e-mails: coluna "E-mail comercial" correta
-PASS  v15.2:local  CSV completo: todas as linhas e status
-PASS  v15.2:local  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
-PASS  v15.2:local  XLSX: coluna E-mail comercial correta
-PASS  v15.2:local  perfil 404 registrado como indisponível, sem e-mail, e a fila conclui
-PASS  v15.2:local  perfil 404 consultado 1 vez
-PASS  v15.2:lista_inexistente  nenhum host externo não simulado
-PASS  v15.2:lista_inexistente  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:lista_inexistente  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:lista_inexistente  sem erro JavaScript na página
-PASS  v15.2:lista_inexistente  lista carregada (2 linhas, sem duplicar autor)
-PASS  v15.2:lista_inexistente  detalhe consultado 1 vez por perfil
-PASS  v15.2:lista_inexistente  e-mails só do contato público (bio, pessoal e oculto fora)
-PASS  v15.2:lista_inexistente  status nome_ok = found
-PASS  v15.2:lista_inexistente  status nome_sumiu = profile_unavailable
-PASS  v15.2:lista_inexistente  extração concluída
-PASS  v15.2:lista_inexistente  histórico no servidor atualizado
-PASS  v15.2:lista_inexistente  histórico local salvo (extract_list_*)
-PASS  v15.2:lista_inexistente  CSV de e-mails: coluna "E-mail comercial" correta
-PASS  v15.2:lista_inexistente  CSV completo: todas as linhas e status
-PASS  v15.2:lista_inexistente  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
-PASS  v15.2:lista_inexistente  XLSX: coluna E-mail comercial correta
-PASS  v15.2:lista_inexistente  nome inexistente não gera /users//info/ com id vazio
-PASS  v15.2:lista_inexistente  nome inexistente consultado 1 vez
-PASS  v15.2:armazenamento_vazio_1313  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:armazenamento_vazio_1313  nenhum host externo não simulado
-PASS  v15.2:armazenamento_vazio_1313  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:armazenamento_vazio_1313  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:armazenamento_vazio_1313  sem erro JavaScript na página
-PASS  v15.2:armazenamento_vazio_1313  com o armazenamento vazio às 13:13, a pausa de 12:59 não existe mais
-PASS  v15.2:armazenamento_vazio_1313  Iniciar envia de novo 1 consulta e recebe 429 (como no teste real)
-PASS  v15.2:armazenamento_vazio_1313  mesma tela do teste real: "recusas seguidas: 1" e pausa até 14:13
-PASS  v15.2:armazenamento_vazio_1313  15.2: o diagnóstico prova o reinício (estado salvo desde 13:13)
-PASS  v15.2:retomada_comment  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:retomada_comment  nenhum host externo não simulado
-PASS  v15.2:retomada_comment  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:retomada_comment  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:retomada_comment  sem erro JavaScript na página
-PASS  v15.2:retomada_comment  sessão 1: 1 perfil consultado, 429 no 2º, pausa
-PASS  v15.2:retomada_comment  histórico da sessão 1 conta só o perfil consultado (1), não os 3 listados
-PASS  v15.2:retomada_comment  Iniciar habilitado depois da pausa
-PASS  v15.2:retomada_comment  sessão 2 consulta só os pendentes (sem repetir ret_um)
-PASS  v15.2:retomada_comment  retomada conclui a tarefa
-PASS  v15.2:retomada_comment  histórico local com os 3 perfis, sem duplicar
-PASS  v15.2:retomada_comment  e-mails dos 3 perfis preservados no histórico
-PASS  v15.2:pausa_1259_1313  nenhuma chamada a /users/{id}/info/
-PASS  v15.2:pausa_1259_1313  nenhum host externo não simulado
-PASS  v15.2:pausa_1259_1313  intervalo >= 10 s entre consultas de perfil
-PASS  v15.2:pausa_1259_1313  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.2:pausa_1259_1313  sem erro JavaScript na página
-PASS  v15.2:pausa_1259_1313  12:59: 1 consulta, HTTP 429 sem Retry-After
-PASS  v15.2:pausa_1259_1313  12:59: pausa de 60 min salva no navegador (até 13:59)
-PASS  v15.2:pausa_1259_1313  12:59: contador de recusas = 1 e marcador do estado criado
-PASS  v15.2:pausa_1259_1313  diagnóstico mostra pausa salva no navegador e Retry-After ausente
-PASS  v15.2:pausa_1259_1313  diagnóstico não expõe cookie, token nem cabeçalhos
-PASS  v15.2:pausa_1259_1313  reaberto: ZERO consultas ao Instagram durante a pausa
-PASS  v15.2:pausa_1259_1313  reaberto: pausa conservada (até 13:59) e coleta pausada
-PASS  v15.2:pausa_1259_1313  reaberto: Iniciar e "Verificar 1 perfil" bloqueados
-PASS  v15.2:pausa_1259_1313  recarregar: ZERO consultas ao Instagram durante a pausa
-PASS  v15.2:pausa_1259_1313  recarregar: pausa conservada (até 13:59) e coleta pausada
-PASS  v15.2:pausa_1259_1313  recarregar: Iniciar e "Verificar 1 perfil" bloqueados
-PASS  v15.2:pausa_1259_1313  atualizar_arquivos: ZERO consultas ao Instagram durante a pausa
-PASS  v15.2:pausa_1259_1313  atualizar_arquivos: pausa conservada (até 13:59) e coleta pausada
-PASS  v15.2:pausa_1259_1313  atualizar_arquivos: Iniciar e "Verificar 1 perfil" bloqueados
-PASS  v15.2:pausa_1259_1313  varias_abas: ZERO consultas ao Instagram durante a pausa
-PASS  v15.2:pausa_1259_1313  reaberto às 13:13:06 (relógio da página)
-PASS  v15.2:pausa_1259_1313  várias abas: Seguidores também respeita a pausa salva
-PASS  v15.2:pausa_1259_1313  13:59:30: Iniciar volta a funcionar e envia 1 única consulta de perfil
-PASS  v15.2:pausa_1259_1313  13:59:30: novo 429 conta 2 recusas seguidas (contador persistiu)
-PASS  v15.2:pausa_1259_1313  13:59:30: nova pausa de 60 min salva (até 14:59)
-PASS  v15.2:pausa_1259_1313  a outra aba do Comment continuou pausada
-PASS  v15.2:seguidores_falhas  nenhum host externo não simulado
-PASS  v15.2:seguidores_falhas  intervalo >= 10 s entre consultas de detalhe
-PASS  v15.2:seguidores_falhas  detalhe com app-id web e sem troca de User-Agent
-PASS  v15.2:seguidores_falhas  sem erro JavaScript na página
-PASS  v15.2:seguidores_falhas  erro passageiro: 1 nova tentativa e sucesso
-PASS  v15.2:seguidores_falhas  erro persistente: 2 tentativas, linha marcada como falha
-PASS  v15.2:seguidores_falhas  fila segue e conclui
-PASS  v15.2:seguidores_falhas  e-mails só dos perfis respondidos
+PASS  v153:tipos_mistos  não inicia sozinho
+PASS  v153:pausa_compartilhada  nenhuma chamada a /users/{id}/info/
+PASS  v153:pausa_compartilhada  nenhum host externo não simulado
+PASS  v153:pausa_compartilhada  intervalo >= 10 s entre consultas de perfil
+PASS  v153:pausa_compartilhada  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:pausa_compartilhada  sem erro JavaScript na página
+PASS  v153:pausa_compartilhada  nenhuma consulta de perfil durante a pausa de outro dashboard
+PASS  v153:pausa_compartilhada  nenhuma leitura de comentários durante a pausa
+PASS  v153:pausa_compartilhada  aviso explica a pausa salva
+PASS  v153:pausa_compartilhada  pausa salva preservada e refletida na tela
+PASS  v153:primeiro_429  nenhuma chamada a /users/{id}/info/
+PASS  v153:primeiro_429  nenhum host externo não simulado
+PASS  v153:primeiro_429  intervalo >= 10 s entre consultas de perfil
+PASS  v153:primeiro_429  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:primeiro_429  sem erro JavaScript na página
+PASS  v153:primeiro_429  apenas 1 consulta e nenhuma repetição automática
+PASS  v153:primeiro_429  pausa persistida conforme Retry-After/60 min
+PASS  v153:primeiro_429  após recarregar: pausa ativa e Iniciar desabilitado
+PASS  v153:primeiro_429  aviso de HTTP 429 exibido
+PASS  v153:primeiro_429  linha marcada com falha de acesso 429 (não como e-mail ausente)
+PASS  v153:primeiro_429  contador mostra encontrados x consultados (2 encontrados, 0 consultados)
+PASS  v153:omitidos_profissionais  nenhuma chamada a /users/{id}/info/
+PASS  v153:omitidos_profissionais  nenhum host externo não simulado
+PASS  v153:omitidos_profissionais  intervalo >= 10 s entre consultas de perfil
+PASS  v153:omitidos_profissionais  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:omitidos_profissionais  sem erro JavaScript na página
+PASS  v153:omitidos_profissionais  4 profissionais sem campo + 1 pessoal: a fila NÃO para (5 consultas) e conclui
+PASS  v153:omitidos_profissionais  status: pessoal / omitido x4
+PASS  v153:omitidos_profissionais  e-mail da bio não usado
+PASS  v153:omitidos_profissionais  nenhuma parada salva: após recarregar, Iniciar habilitado
+PASS  v153:omitidos_profissionais  diagnóstico de 1 clique executou 1 consulta
+PASS  v153:omitidos_profissionais  diagnóstico de 1 clique mostra rota, HTTP 200 e caminhos de e-mail
+PASS  v153:omitidos_profissionais  diagnóstico de 1 clique não mostra o e-mail, cookie nem token
+PASS  v153:omitidos_profissionais  diagnóstico mostra HTTP 200, campo e tipo
+PASS  v153:omitidos_profissionais  diagnóstico não fala em contato retido
+PASS  v153:omitidos_profissionais  verificação não adiciona linha à tabela
+PASS  v153:retido_pela_web  nenhuma chamada a /users/{id}/info/
+PASS  v153:retido_pela_web  nenhum host externo não simulado
+PASS  v153:retido_pela_web  intervalo >= 10 s entre consultas de perfil
+PASS  v153:retido_pela_web  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:retido_pela_web  sem erro JavaScript na página
+PASS  v153:retido_pela_web  CALL com e-mail nulo não para a fila: 5 consultas e extração concluída
+PASS  v153:retido_pela_web  status "Campo comercial vazio" (sem rótulo de retenção)
+PASS  v153:retido_pela_web  e-mail da bio não usado
+PASS  v153:retido_pela_web  nenhum aviso ou texto de contato retido
+PASS  v153:retido_pela_web  XLSX sem conclusão de retenção
+PASS  v153:retido_pela_web  cada perfil consultado uma única vez
+PASS  v153:tipos_mistos  nenhuma chamada a /users/{id}/info/
+PASS  v153:tipos_mistos  nenhum host externo não simulado
+PASS  v153:tipos_mistos  intervalo >= 10 s entre consultas de perfil
+PASS  v153:tipos_mistos  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:tipos_mistos  sem erro JavaScript na página
+PASS  v153:tipos_mistos  status pessoal_sem_campo = not_professional
+PASS  v153:tipos_mistos  status loja_com_email = found
+PASS  v153:tipos_mistos  status criador_nulo = empty
+PASS  v153:tipos_mistos  status loja_oculta = hidden
+PASS  v153:tipos_mistos  status loja_vazia = empty
+PASS  v153:tipos_mistos  status conta_apagada = profile_unavailable
+PASS  v153:tipos_mistos  status pessoal_nulo = not_professional
+PASS  v153:tipos_mistos  fila não parou por perfil pessoal/omitido
+PASS  v153:tipos_mistos  cada perfil consultado uma única vez
+PASS  v153:tipos_mistos  único e-mail = campo comercial (bio ignorada)
+PASS  v153:tipos_mistos  e-mail oculto não coletado
+PASS  v153:tipos_mistos  textos distintos: vazio/oculto/pessoal/indisponível/encontrado
+PASS  v153:tipos_mistos  sem método de contato anunciado, nada é rotulado como retido
+PASS  v153:tipos_mistos  perfil apagado preserva nome do comentário
+PASS  v153:tipos_mistos  CSV de e-mails: coluna "E-mail comercial" só com o contato comercial
+PASS  v153:tipos_mistos  CSV completo: coluna de e-mail sem bio/oculto/pessoal
+PASS  v153:tipos_mistos  CSV completo tem 7 linhas e coluna de status
+PASS  v153:tipos_mistos  XLSX: aba de dados + 2 abas de diagnóstico automáticas
+PASS  v153:tipos_mistos  XLSX diagnóstico: campo omitido x nulo x vazio por perfil
+PASS  v153:tipos_mistos  XLSX diagnóstico: sinal de contato oculto registrado
+PASS  v153:tipos_mistos  XLSX diagnóstico: sem e-mail completo nas abas de diagnóstico
+PASS  v153:tipos_mistos  XLSX dados: coluna E-mail comercial só com o contato do campo
+PASS  v153:tipos_mistos  histórico local salvo (extract_list_*)
+PASS  v153:tipos_mistos  evidência sanitizada registrada (sem e-mail completo)
+PASS  v153:verificacao_429  nenhuma chamada a /users/{id}/info/
+PASS  v153:verificacao_429  nenhum host externo não simulado
+PASS  v153:verificacao_429  intervalo >= 10 s entre consultas de perfil
+PASS  v153:verificacao_429  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:verificacao_429  sem erro JavaScript na página
+PASS  v153:verificacao_429  verificação recebeu 429: 1 consulta, pausa salva pelo Retry-After
+PASS  v153:verificacao_429  durante a pausa: verificação e Iniciar desabilitados
+PASS  v153:verificacao_429  nenhuma consulta automática depois do 429
+PASS  v153:verificacao_429  diagnóstico registra HTTP 429 e Retry-After
+PASS  v153:identidade  nenhuma chamada a /users/{id}/info/
+PASS  v153:identidade  nenhum host externo não simulado
+PASS  v153:identidade  intervalo >= 10 s entre consultas de perfil
+PASS  v153:identidade  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:identidade  sem erro JavaScript na página
+PASS  v153:identidade  perfil divergente marcado e não aplicado
+PASS  v153:identidade  fila segue para o próximo perfil
+PASS  v153:primeiro_429_sem_retry_after  nenhuma chamada a /users/{id}/info/
+PASS  v153:primeiro_429_sem_retry_after  nenhum host externo não simulado
+PASS  v153:primeiro_429_sem_retry_after  intervalo >= 10 s entre consultas de perfil
+PASS  v153:primeiro_429_sem_retry_after  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:primeiro_429_sem_retry_after  sem erro JavaScript na página
+PASS  v153:primeiro_429_sem_retry_after  apenas 1 consulta e nenhuma repetição automática
+PASS  v153:primeiro_429_sem_retry_after  pausa persistida conforme Retry-After/60 min
+PASS  v153:primeiro_429_sem_retry_after  após recarregar: pausa ativa e Iniciar desabilitado
+PASS  v153:primeiro_429_sem_retry_after  aviso de HTTP 429 exibido
+PASS  v153:primeiro_429_sem_retry_after  linha marcada com falha de acesso 429 (não como e-mail ausente)
+PASS  v153:primeiro_429_sem_retry_after  contador mostra encontrados x consultados (2 encontrados, 0 consultados)
+PASS  v153:prova_persistente  nenhuma chamada a /users/{id}/info/
+PASS  v153:prova_persistente  nenhum host externo não simulado
+PASS  v153:prova_persistente  intervalo >= 10 s entre consultas de perfil
+PASS  v153:prova_persistente  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:prova_persistente  sem erro JavaScript na página
+PASS  v153:prova_persistente  prova real registrada no schema
+PASS  v153:prova_persistente  e-mail da prova fica mascarado no schema
+PASS  v153:prova_persistente  prova sobrevive ao log rolante e à recarga
+PASS  v153:prova_persistente  diagnóstico confirma a prova após recarga
+PASS  v153:prova_persistente  fila concluída (não ficou em laço)
+PASS  v153:lista_sem_retry  nenhum host externo não simulado
+PASS  v153:lista_sem_retry  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:lista_sem_retry  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:lista_sem_retry  sem erro JavaScript na página
+PASS  v153:lista_sem_retry  403 na lista pausa sem repetição automática
+PASS  v153:lista_sem_retry  mensagem em português explica a pausa
+PASS  v153:lista_sem_retry  nenhuma consulta de perfil disparada
+PASS  v153:export_vazio  nenhuma chamada a /users/{id}/info/
+PASS  v153:export_vazio  nenhum host externo não simulado
+PASS  v153:export_vazio  intervalo >= 10 s entre consultas de perfil
+PASS  v153:export_vazio  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:export_vazio  sem erro JavaScript na página
+PASS  v153:export_vazio  linhas carregadas sem nenhuma consulta de perfil concluída
+PASS  v153:export_vazio  XLSX com as 3 abas mesmo sem diagnóstico
+PASS  v153:export_vazio  aba de diagnóstico lista os 2 perfis com "-" nos campos
+PASS  v153:export_vazio  status mostra aguardando consulta
+PASS  v153:export_vazio  aba de respostas reais diz que não há prova
+PASS  v153:export_vazio  CSV exporta as 2 linhas
+PASS  v153:export_vazio  sem erro de página após exportar
+PASS  v153:falha_http403  nenhuma chamada a /users/{id}/info/
+PASS  v153:falha_http403  nenhum host externo não simulado
+PASS  v153:falha_http403  intervalo >= 10 s entre consultas de perfil
+PASS  v153:falha_http403  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:falha_http403  sem erro JavaScript na página
+PASS  v153:falha_http403  parou após 1 consulta, sem repetição automática
+PASS  v153:falha_http403  linha marcada com falha (access)
+PASS  v153:falha_http403  próximo perfil não consultado
+PASS  v153:falha_html  nenhuma chamada a /users/{id}/info/
+PASS  v153:falha_html  nenhum host externo não simulado
+PASS  v153:falha_html  intervalo >= 10 s entre consultas de perfil
+PASS  v153:falha_html  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:falha_html  sem erro JavaScript na página
+PASS  v153:falha_html  parou após 1 consulta, sem repetição automática
+PASS  v153:falha_html  linha marcada com falha (invalid_response)
+PASS  v153:falha_html  próximo perfil não consultado
+PASS  v153:falha_redirect  nenhuma chamada a /users/{id}/info/
+PASS  v153:falha_redirect  nenhum host externo não simulado
+PASS  v153:falha_redirect  intervalo >= 10 s entre consultas de perfil
+PASS  v153:falha_redirect  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:falha_redirect  sem erro JavaScript na página
+PASS  v153:falha_redirect  parou após 1 consulta, sem repetição automática
+PASS  v153:falha_redirect  linha marcada com falha (redirect)
+PASS  v153:falha_redirect  próximo perfil não consultado
+PASS  v153:tres_indisponiveis  nenhuma chamada a /users/{id}/info/
+PASS  v153:tres_indisponiveis  nenhum host externo não simulado
+PASS  v153:tres_indisponiveis  intervalo >= 10 s entre consultas de perfil
+PASS  v153:tres_indisponiveis  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:tres_indisponiveis  sem erro JavaScript na página
+PASS  v153:tres_indisponiveis  pausa após 3 indisponíveis seguidos
+PASS  v153:tres_indisponiveis  Continue retoma e segue para o próximo perfil
+PASS  v153:tres_indisponiveis  indisponíveis não são consultados de novo
+PASS  v153:hashtag  nenhum host externo não simulado
+PASS  v153:hashtag  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:hashtag  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:hashtag  sem erro JavaScript na página
+PASS  v153:hashtag  lista carregada (2 linhas, sem duplicar autor)
+PASS  v153:hashtag  detalhe consultado 1 vez por perfil
+PASS  v153:hashtag  e-mails só do contato público (bio, pessoal e oculto fora)
+PASS  v153:hashtag  status tag_loja = found
+PASS  v153:hashtag  status tag_vazia = empty
+PASS  v153:hashtag  extração concluída
+PASS  v153:hashtag  histórico no servidor atualizado
+PASS  v153:hashtag  histórico local salvo (extract_list_*)
+PASS  v153:hashtag  CSV de e-mails: coluna "E-mail comercial" correta
+PASS  v153:hashtag  CSV completo: todas as linhas e status
+PASS  v153:hashtag  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
+PASS  v153:hashtag  XLSX: coluna E-mail comercial correta
+PASS  v153:seguindo  nenhum host externo não simulado
+PASS  v153:seguindo  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:seguindo  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:seguindo  sem erro JavaScript na página
+PASS  v153:seguindo  lista carregada (2 linhas, sem duplicar autor)
+PASS  v153:seguindo  detalhe consultado 1 vez por perfil
+PASS  v153:seguindo  e-mails só do contato público (bio, pessoal e oculto fora)
+PASS  v153:seguindo  status sgd_loja = found
+PASS  v153:seguindo  status sgd_pessoa = not_professional
+PASS  v153:seguindo  extração concluída
+PASS  v153:seguindo  histórico no servidor atualizado
+PASS  v153:seguindo  histórico local salvo (extract_list_*)
+PASS  v153:seguindo  CSV de e-mails: coluna "E-mail comercial" correta
+PASS  v153:seguindo  CSV completo: todas as linhas e status
+PASS  v153:seguindo  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
+PASS  v153:seguindo  XLSX: coluna E-mail comercial correta
+PASS  v153:seguindo  lista lida de following (não de followers)
+PASS  v153:curtidas  nenhum host externo não simulado
+PASS  v153:curtidas  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:curtidas  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:curtidas  sem erro JavaScript na página
+PASS  v153:curtidas  lista carregada (3 linhas, sem duplicar autor)
+PASS  v153:curtidas  detalhe consultado 1 vez por perfil
+PASS  v153:curtidas  e-mails só do contato público (bio, pessoal e oculto fora)
+PASS  v153:curtidas  status cur_loja = found
+PASS  v153:curtidas  status cur_pessoa = not_professional
+PASS  v153:curtidas  status cur_oculto = hidden
+PASS  v153:curtidas  extração concluída
+PASS  v153:curtidas  histórico no servidor atualizado
+PASS  v153:curtidas  histórico local salvo (extract_list_*)
+PASS  v153:curtidas  CSV de e-mails: coluna "E-mail comercial" correta
+PASS  v153:curtidas  CSV completo: todas as linhas e status
+PASS  v153:curtidas  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
+PASS  v153:curtidas  XLSX: coluna E-mail comercial correta
+PASS  v153:curtidas  telefone público preservado
+PASS  v153:seguidores  nenhum host externo não simulado
+PASS  v153:seguidores  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:seguidores  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:seguidores  sem erro JavaScript na página
+PASS  v153:seguidores  lista de seguidores carregada (3 linhas)
+PASS  v153:seguidores  detalhe consultado 1 vez por seguidor
+PASS  v153:seguidores  e-mails só de public_email (bio ignorada)
+PASS  v153:seguidores  status: encontrado / pessoal / encontrado
+PASS  v153:seguidores  telefone público preservado
+PASS  v153:seguidores  extração concluída
+PASS  v153:seguidores  CSV de e-mails com a coluna certa
+PASS  v153:seguidores_429  nenhum host externo não simulado
+PASS  v153:seguidores_429  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:seguidores_429  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:seguidores_429  sem erro JavaScript na página
+PASS  v153:seguidores_429  429 respeitado: 2ª tentativa só depois do Retry-After
+PASS  v153:seguidores_429  sem martelar: no máximo 2 consultas ao perfil limitado
+PASS  v153:seguidores_429  retoma sozinho fora do Comment e conclui
+PASS  v153:seguidores_429  pausa compartilhada gravada
+PASS  v153:lista  nenhum host externo não simulado
+PASS  v153:lista  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:lista  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:lista  sem erro JavaScript na página
+PASS  v153:lista  lista carregada (2 linhas, sem duplicar autor)
+PASS  v153:lista  detalhe consultado 1 vez por perfil
+PASS  v153:lista  e-mails só do contato público (bio, pessoal e oculto fora)
+PASS  v153:lista  status lista_loja = found
+PASS  v153:lista  status lista_pessoa = not_professional
+PASS  v153:lista  extração concluída
+PASS  v153:lista  histórico no servidor atualizado
+PASS  v153:lista  histórico local salvo (extract_list_*)
+PASS  v153:lista  CSV de e-mails: coluna "E-mail comercial" correta
+PASS  v153:lista  CSV completo: todas as linhas e status
+PASS  v153:lista  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
+PASS  v153:lista  XLSX: coluna E-mail comercial correta
+PASS  v153:lista  lista lida do storage e enviada ao histórico
+PASS  v153:lista  chave temporária da lista removida do storage
+PASS  v153:lista  nome -> id resolvido 1 vez por perfil
+PASS  v153:local  nenhum host externo não simulado
+PASS  v153:local  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:local  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:local  sem erro JavaScript na página
+PASS  v153:local  lista carregada (3 linhas, sem duplicar autor)
+PASS  v153:local  detalhe consultado 1 vez por perfil
+PASS  v153:local  e-mails só do contato público (bio, pessoal e oculto fora)
+PASS  v153:local  status loc_loja = found
+PASS  v153:local  status loc_criador = found
+PASS  v153:local  extração concluída
+PASS  v153:local  histórico no servidor atualizado
+PASS  v153:local  histórico local salvo (extract_list_*)
+PASS  v153:local  CSV de e-mails: coluna "E-mail comercial" correta
+PASS  v153:local  CSV completo: todas as linhas e status
+PASS  v153:local  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
+PASS  v153:local  XLSX: coluna E-mail comercial correta
+PASS  v153:local  perfil 404 registrado como indisponível, sem e-mail, e a fila conclui
+PASS  v153:local  perfil 404 consultado 1 vez
+PASS  v153:dj_filtro  nenhum host externo não simulado
+PASS  v153:dj_filtro  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:dj_filtro  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:dj_filtro  sem erro JavaScript na página
+PASS  v153:dj_filtro  tarefa conclui com o filtro DJ ligado
+PASS  v153:dj_filtro  filtro só afeta a visão (1 lead na tabela, 3 processados)
+PASS  v153:dj_filtro  histórico local guarda os 3 perfis
+PASS  v153:dj_filtro  histórico no servidor: 3 extraídos, 3 e-mails, concluído
+PASS  v153:seguidores_pausa_salva  nenhum host externo não simulado
+PASS  v153:seguidores_pausa_salva  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:seguidores_pausa_salva  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:seguidores_pausa_salva  sem erro JavaScript na página
+PASS  v153:seguidores_pausa_salva  pausa salva respeitada: nenhuma consulta ao Instagram antes do fim
+PASS  v153:seguidores_pausa_salva  dashboard começa pausado com aviso da pausa
+PASS  v153:seguidores_pausa_salva  retoma sozinho depois da pausa e conclui
+PASS  v153:lista_inexistente  nenhum host externo não simulado
+PASS  v153:lista_inexistente  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:lista_inexistente  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:lista_inexistente  sem erro JavaScript na página
+PASS  v153:lista_inexistente  lista carregada (2 linhas, sem duplicar autor)
+PASS  v153:lista_inexistente  detalhe consultado 1 vez por perfil
+PASS  v153:lista_inexistente  e-mails só do contato público (bio, pessoal e oculto fora)
+PASS  v153:lista_inexistente  status nome_ok = found
+PASS  v153:lista_inexistente  status nome_sumiu = profile_unavailable
+PASS  v153:lista_inexistente  extração concluída
+PASS  v153:lista_inexistente  histórico no servidor atualizado
+PASS  v153:lista_inexistente  histórico local salvo (extract_list_*)
+PASS  v153:lista_inexistente  CSV de e-mails: coluna "E-mail comercial" correta
+PASS  v153:lista_inexistente  CSV completo: todas as linhas e status
+PASS  v153:lista_inexistente  XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)
+PASS  v153:lista_inexistente  XLSX: coluna E-mail comercial correta
+PASS  v153:lista_inexistente  nome inexistente não gera /users//info/ com id vazio
+PASS  v153:lista_inexistente  nome inexistente consultado 1 vez
+PASS  v153:armazenamento_vazio_1313  nenhuma chamada a /users/{id}/info/
+PASS  v153:armazenamento_vazio_1313  nenhum host externo não simulado
+PASS  v153:armazenamento_vazio_1313  intervalo >= 10 s entre consultas de perfil
+PASS  v153:armazenamento_vazio_1313  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:armazenamento_vazio_1313  sem erro JavaScript na página
+PASS  v153:armazenamento_vazio_1313  com o armazenamento vazio às 13:13, a pausa de 12:59 não existe mais
+PASS  v153:armazenamento_vazio_1313  Iniciar envia de novo 1 consulta e recebe 429 (como no teste real)
+PASS  v153:armazenamento_vazio_1313  mesma tela do teste real: "recusas seguidas: 1" e pausa até 14:13
+PASS  v153:armazenamento_vazio_1313  15.2: o diagnóstico prova o reinício (estado salvo desde 13:13)
+PASS  v153:retomada_comment  nenhuma chamada a /users/{id}/info/
+PASS  v153:retomada_comment  nenhum host externo não simulado
+PASS  v153:retomada_comment  intervalo >= 10 s entre consultas de perfil
+PASS  v153:retomada_comment  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:retomada_comment  sem erro JavaScript na página
+PASS  v153:retomada_comment  sessão 1: 1 perfil consultado, 429 no 2º, pausa
+PASS  v153:retomada_comment  histórico da sessão 1 conta só o perfil consultado (1), não os 3 listados
+PASS  v153:retomada_comment  Iniciar habilitado depois da pausa
+PASS  v153:retomada_comment  sessão 2 consulta só os pendentes (sem repetir ret_um)
+PASS  v153:retomada_comment  retomada conclui a tarefa
+PASS  v153:retomada_comment  histórico local com os 3 perfis, sem duplicar
+PASS  v153:retomada_comment  e-mails dos 3 perfis preservados no histórico
+PASS  v153:pausa_1259_1313  nenhuma chamada a /users/{id}/info/
+PASS  v153:pausa_1259_1313  nenhum host externo não simulado
+PASS  v153:pausa_1259_1313  intervalo >= 10 s entre consultas de perfil
+PASS  v153:pausa_1259_1313  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:pausa_1259_1313  sem erro JavaScript na página
+PASS  v153:pausa_1259_1313  12:59: 1 consulta, HTTP 429 sem Retry-After
+PASS  v153:pausa_1259_1313  12:59: pausa de 60 min salva no navegador (até 13:59)
+PASS  v153:pausa_1259_1313  12:59: contador de recusas = 1 e marcador do estado criado
+PASS  v153:pausa_1259_1313  diagnóstico mostra pausa salva no navegador e Retry-After ausente
+PASS  v153:pausa_1259_1313  diagnóstico não expõe cookie, token nem cabeçalhos
+PASS  v153:pausa_1259_1313  reaberto: ZERO consultas ao Instagram durante a pausa
+PASS  v153:pausa_1259_1313  reaberto: pausa conservada (até 13:59) e coleta pausada
+PASS  v153:pausa_1259_1313  reaberto: Iniciar e "Verificar 1 perfil" bloqueados
+PASS  v153:pausa_1259_1313  recarregar: ZERO consultas ao Instagram durante a pausa
+PASS  v153:pausa_1259_1313  recarregar: pausa conservada (até 13:59) e coleta pausada
+PASS  v153:pausa_1259_1313  recarregar: Iniciar e "Verificar 1 perfil" bloqueados
+PASS  v153:pausa_1259_1313  atualizar_arquivos: ZERO consultas ao Instagram durante a pausa
+PASS  v153:pausa_1259_1313  atualizar_arquivos: pausa conservada (até 13:59) e coleta pausada
+PASS  v153:pausa_1259_1313  atualizar_arquivos: Iniciar e "Verificar 1 perfil" bloqueados
+PASS  v153:pausa_1259_1313  varias_abas: ZERO consultas ao Instagram durante a pausa
+PASS  v153:pausa_1259_1313  reaberto às 13:13:06 (relógio da página)
+PASS  v153:pausa_1259_1313  várias abas: Seguidores também respeita a pausa salva
+PASS  v153:pausa_1259_1313  13:59:30: Iniciar volta a funcionar e envia 1 única consulta de perfil
+PASS  v153:pausa_1259_1313  13:59:30: novo 429 conta 2 recusas seguidas (contador persistiu)
+PASS  v153:pausa_1259_1313  13:59:30: nova pausa de 60 min salva (até 14:59)
+PASS  v153:pausa_1259_1313  a outra aba do Comment continuou pausada
+PASS  v153:seguidores_falhas  nenhum host externo não simulado
+PASS  v153:seguidores_falhas  intervalo >= 10 s entre consultas de detalhe
+PASS  v153:seguidores_falhas  detalhe com app-id web e sem troca de User-Agent
+PASS  v153:seguidores_falhas  sem erro JavaScript na página
+PASS  v153:seguidores_falhas  erro passageiro: 1 nova tentativa e sucesso
+PASS  v153:seguidores_falhas  erro persistente: 2 tentativas, linha marcada como falha
+PASS  v153:seguidores_falhas  fila segue e conclui
+PASS  v153:seguidores_falhas  e-mails só dos perfis respondidos
+PASS  v153:cache_entre_extracoes  nenhuma chamada a /users/{id}/info/
+PASS  v153:cache_entre_extracoes  nenhum host externo não simulado
+PASS  v153:cache_entre_extracoes  intervalo >= 10 s entre consultas de perfil
+PASS  v153:cache_entre_extracoes  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:cache_entre_extracoes  sem erro JavaScript na página
+PASS  v153:cache_entre_extracoes  1ª extração: 2 consultas
+PASS  v153:cache_entre_extracoes  2ª extração (outro post): 0 consultas, mesmos resultados do cache
+PASS  v153:cache_entre_extracoes  2ª extração conclui sem esperar 10 s por perfil
+PASS  v153:cache_entre_extracoes  cache salvo no navegador por perfil
+PASS  v153:comentarios_primeiro  nenhuma chamada a /users/{id}/info/
+PASS  v153:comentarios_primeiro  nenhum host externo não simulado
+PASS  v153:comentarios_primeiro  intervalo >= 10 s entre consultas de perfil
+PASS  v153:comentarios_primeiro  X-IG-App-ID web padrão, sem troca de host
+PASS  v153:comentarios_primeiro  sem erro JavaScript na página
+PASS  v153:comentarios_primeiro  as 3 páginas de comentários vêm antes da 1ª consulta de perfil
+PASS  v153:comentarios_primeiro  429 no 2º perfil: 2 consultas no total, nenhuma repetição automática
+PASS  v153:comentarios_primeiro  os 7 comentaristas continuam na tabela e no histórico local depois do 429
+PASS  v153:comentarios_primeiro  e-mail do 1º mantido; 2º marcado com 429; demais aguardando
+PASS  v153:comentarios_primeiro  pausa salva pelo Retry-After (300 s)
+PASS  v153:comentarios_primeiro  CSV exporta os 7 comentaristas
 
-TOTAL: 359 verificações OK / 0 falhas, em 29 cenários
+TOTAL: 379 verificações OK / 0 falhas, em 31 cenários
 
 ==============================================================================
-5. A PAUSA QUE SUMIU — reprodução e ciclo de vida do armazenamento (simulado)
+5. OS MESMOS TESTES NA 15.2 (o que a 15.3 muda)
 ==============================================================================
-5a. Mesmo roteiro (12:59 → 13:13 → Recarregar → arquivos novos → várias abas → 13:59:30)
-    rodado na PATCHED 15.1, a versão do teste real das 13:13:
-PASS  v15.1:pausa_1259_1313  nenhuma chamada a /users/{id}/info/
-PASS  v15.1:pausa_1259_1313  nenhum host externo não simulado
-PASS  v15.1:pausa_1259_1313  intervalo >= 10 s entre consultas de perfil
-PASS  v15.1:pausa_1259_1313  X-IG-App-ID web padrão, sem troca de host
-PASS  v15.1:pausa_1259_1313  sem erro JavaScript na página
-PASS  v15.1:pausa_1259_1313  12:59: 1 consulta, HTTP 429 sem Retry-After
-FAIL  v15.1:pausa_1259_1313  12:59: pausa de 60 min salva no navegador (até 13:59)  {"stored":"13:59:18","at":"12:59:18"}
-FAIL  v15.1:pausa_1259_1313  12:59: contador de recusas = 1 e marcador do estado criado  {"refusals":1}
-FAIL  v15.1:pausa_1259_1313  diagnóstico mostra pausa salva no navegador e Retry-After ausente  undefined
-PASS  v15.1:pausa_1259_1313  reaberto: ZERO consultas ao Instagram durante a pausa
-PASS  v15.1:pausa_1259_1313  reaberto: pausa conservada (até 13:59) e coleta pausada
-PASS  v15.1:pausa_1259_1313  reaberto: Iniciar e "Verificar 1 perfil" bloqueados
-PASS  v15.1:pausa_1259_1313  recarregar: ZERO consultas ao Instagram durante a pausa
-PASS  v15.1:pausa_1259_1313  recarregar: pausa conservada (até 13:59) e coleta pausada
-PASS  v15.1:pausa_1259_1313  recarregar: Iniciar e "Verificar 1 perfil" bloqueados
-PASS  v15.1:pausa_1259_1313  atualizar_arquivos: ZERO consultas ao Instagram durante a pausa
-PASS  v15.1:pausa_1259_1313  atualizar_arquivos: pausa conservada (até 13:59) e coleta pausada
-PASS  v15.1:pausa_1259_1313  atualizar_arquivos: Iniciar e "Verificar 1 perfil" bloqueados
-PASS  v15.1:pausa_1259_1313  varias_abas: ZERO consultas ao Instagram durante a pausa
-PASS  v15.1:pausa_1259_1313  reaberto às 13:13:06 (relógio da página)
-PASS  v15.1:pausa_1259_1313  várias abas: Seguidores também respeita a pausa salva
-PASS  v15.1:pausa_1259_1313  13:59:30: Iniciar volta a funcionar e envia 1 única consulta de perfil
-PASS  v15.1:pausa_1259_1313  13:59:30: novo 429 conta 2 recusas seguidas (contador persistiu)
-PASS  v15.1:pausa_1259_1313  13:59:30: nova pausa de 60 min salva (até 14:59)
-PASS  v15.1:pausa_1259_1313  a outra aba do Comment continuou pausada
-    (as 3 falhas são verificações que só existem a partir da 15.2: marcador do estado,
-     'pausa salva' no diagnóstico e Retry-After=ausente; a pausa foi conservada)
+Unitários na 15.2:
+ℹ tests 54
+ℹ pass 40
+ℹ fail 14
+  ✖ parser: e-mail nulo é "vazio" mesmo com botão CALL/TEXT (sem inferência de retenção)
+  ✖ parser: nenhuma combinação de flags marca contato retido
+  ✖ parser: textos de status distintos e falhas de acesso
+  ✖ reader: perfis sem e-mail (pessoais, omitidos, vazios, ocultos) nunca param a fila
+  ✖ reader: parada por rota salva pela 14-15.2 não bloqueia mais a fila nem a verificação
+  ✖ reader: comerciais com CALL/TEXT e e-mail nulo seguem a fila como "vazio"
+  ✖ reader: não existe mais parada por decisão de rota (blockReason sempre vazio)
+  ✖ emailPaths: lista caminhos e tipos de todos os campos de e-mail, sem valores
+  ✖ leitor: evidência registra os caminhos de e-mail recebidos, sem valores
+  ✖ cache persistente: o mesmo perfil não é consultado de novo em outra extração
+  ✖ cache persistente: indisponível vale 3 dias; divergência de identidade não é guardada
+  ✖ cache persistente: limite de 3000 perfis descarta os mais antigos
+  ✖ ritmo adaptativo: 429 dobra o intervalo (até 2 min); 5 respostas seguidas reduzem 20%
+  ✖ ritmo adaptativo: intervalo salvo maior vale para todas as abas, sem consulta durante a espera
+Dados na 15.2:
+ℹ tests 18
+ℹ pass 12
+ℹ fail 6
+  ✖ Comment 15.3: a lista inteira é lida e salva antes da 1ª consulta de e-mail; 429 preserva os comentaristas
+  ✖ Comment 15.3: perfil já consultado em outra extração não é consultado de novo
+  ✖ Comment 15.3: perfis comerciais sem e-mail (CALL/TEXT ou campo omitido) não param a fila
+  ✖ Comment 15.3: perfis vindos do cache não esperam o intervalo de 10 s (nenhuma consulta)
+  ✖ Comment 15.3: cursor repetido ou ausente encerra a lista e as consultas de e-mail começam
+  ✖ Comment 15.3: retomada cuja lista falha no meio não encolhe os comentaristas salvos
 
-5b. Ciclo de vida do armazenamento no Chromium (modo de desenvolvedor ligado):
+==============================================================================
+6. ATUALIZAÇÃO 15.2 → 15.3 SEM PERDER A PAUSA (Chromium, modo de desenvolvedor, simulado)
+==============================================================================
 0. estado gravado (pausa até 13:59:23 BRT, recusas=1)          {"pause":"2026-10-05T16:59:23.000Z","refusals":1}
 1. botão Recarregar                                            {"pause":"2026-10-05T16:59:23.000Z","refusals":1}
 2. arquivos novos copiados sobre a pasta + Recarregar          {"pause":"2026-10-05T16:59:23.000Z","refusals":1}
@@ -512,11 +551,21 @@ PASS  v15.1:pausa_1259_1313  a outra aba do Comment continuou pausada
      o efeito da remoção sobre o armazenamento NÃO foi verificado aqui)
 
 ==============================================================================
-6. TESTES REAIS (feitos pelo usuário em 05/10/2026)
+7. CAPTURAS REAIS DE TERCEIROS USADAS COMO REFERÊNCIA (não são testes desta versão)
 ==============================================================================
-12:59 (PATCHED 15): lista de comentários OK (47 perfis, post com 733 comentários);
-      1ª consulta web_profile_info (@djrolandgonzales): HTTP 429; pausa até 13:59:23;
-      'recusas seguidas: 1'. Nada repetido.
-13:13 (PATCHED 15.1): 1ª consulta web_profile_info: HTTP 429; pausa até 14:13:06;
-      'recusas seguidas: 1' — a pausa e o contador das 12:59 não estavam no armazenamento.
-E-mail comercial público: NÃO comprovado. Coleta NÃO restaurada.
+Forma web (web_profile_info): 11 de 11 com business_email = null
+  (9 comerciais e 2 criadores; business_contact_method CALL x6, TEXT x1, UNKNOWN x4).
+Forma móvel (/users/{id}/info/ e usernameinfo): 3 de 3 com public_email preenchido
+  (2 comerciais e 1 criador). Nenhuma com contact_email ou e-mail em objeto aninhado.
+Duas capturas de web_profile_info de terceiros registram HTTP 429 sem corpo.
+
+==============================================================================
+8. TESTES REAIS (feitos pelo usuário em 05/10/2026)
+==============================================================================
+12:59    (PATCHED 15):   lista de comentários OK (47 perfis, post com 733 comentários);
+         1ª consulta web_profile_info: HTTP 429; pausa até 13:59:23. Nada repetido.
+13:13    (PATCHED 15.1): 1ª consulta web_profile_info: HTTP 429; pausa até 14:13:06.
+14:16:38 (PATCHED 15.2): lista de comentários OK (tela: 87 perfis encontrados, 219 comentários);
+         1ª consulta web_profile_info: HTTP 429; pausa até 15:16:38; 'recusas seguidas: 2'.
+Consultas reais de perfil: 3. Respostas de perfil: 0. Todas recusadas com HTTP 429.
+E-mail comercial público: NÃO comprovado. Coleta NÃO restaurada. 15.3: não validada em resposta real.

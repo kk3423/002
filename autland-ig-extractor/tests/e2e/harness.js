@@ -141,10 +141,14 @@ async function install(ctx, scenario, log) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
     }
     if (u.host === 'www.instagram.com' && u.pathname.startsWith('/__test__/comments/')) {
-      log.push({ t, kind: 'comments', url });
+      // Optional paging (scenario.commentPageSize): cursor '' -> page 0, 'p1' -> page 1...
+      const all = scenario.comments.map((c) => ({ user: { pk: String(c.pk), username: c.username, full_name: c.full_name || c.username, profile_pic_url: PIXEL } }));
+      const size = scenario.commentPageSize || Math.max(1, all.length);
+      const page = Number(String(u.searchParams.get('cursor') || '').replace('p', '')) || 0;
+      log.push({ t, kind: 'comments', url, page });
       if (scenario.commentsStatus) return route.fulfill({ status: scenario.commentsStatus, contentType: 'application/json', body: JSON.stringify({ status: 'fail', message: 'login_required' }) });
-      const comments = scenario.comments.map((c) => ({ user: { pk: String(c.pk), username: c.username, full_name: c.full_name || c.username, profile_pic_url: PIXEL } }));
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', comments, next_cursor: '', has_more: false, comment_count: comments.length }) });
+      const comments = all.slice(page * size, (page + 1) * size), more = (page + 1) * size < all.length;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', comments, next_cursor: more ? 'p' + (page + 1) : '', has_more: more, comment_count: all.length }) });
     }
     if (u.host === 'www.instagram.com' && u.pathname === '/api/v1/users/web_profile_info/') {
       const username = u.searchParams.get('username');
