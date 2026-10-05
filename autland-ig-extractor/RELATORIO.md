@@ -1,95 +1,117 @@
-# Autland IG Extractor — PATCHED 15.1 — Relatório
+# Autland IG Extractor — PATCHED 15.2 — Relatório
 
 ## Resultado
 
-| Parte | Situação |
+**A coleta do e-mail de "Contato → E-mail" no modo Comment NÃO está restaurada.**
+
+- Nos seus dois testes reais, o Instagram recusou a consulta de perfil com
+  **HTTP 429** já na 1ª chamada.
+- Mesmo sem o 429, toda evidência disponível indica que essa consulta não
+  traz o e-mail comercial (seção 3).
+- A versão 15.2 não muda isso. Ela corrige um defeito de gravação da pausa e
+  registra no diagnóstico o que faltava para provar o que aconteceu.
+
+## 1. A pausa que "sumiu" às 13:13
+
+### Fatos
+
+| # | Fato | Evidência |
+|---|---|---|
+| 1 | 12:59:23 (PATCHED 15): 429 na 1ª consulta, pausa até 13:59:23 | Seu 1º print |
+| 2 | O contador "recusas seguidas: 1" das 12:59 veio do armazenamento da extensão | No código, o painel relê esse valor do armazenamento depois do 429 |
+| 3 | 13:13:06 (PATCHED 15.1): saiu uma consulta, 429, pausa até 14:13:06 e "recusas seguidas: 1" | Seu 2º print |
+| 4 | Para essa consulta sair, a extensão não encontrou a pausa salva. O contador 1 mostra que também não encontrou o registro das 12:59: os dois sumiram juntos | O leitor confere a pausa salva antes de cada consulta. O contador só volta a 0 com uma resposta de perfil, e não houve nenhuma |
+| 5 | Nada no código apaga ou reduz a pausa ou o contador. As chaves são as mesmas desde a versão 14 | Auditoria: a pausa tem 2 gravadores e ambos ficam com a pausa maior; não existe `clear()` nem remoção dessas chaves |
+| 6 | Com a **15.1**, a pausa e o contador se mantêm, com **zero consultas** ao Instagram durante a pausa | Teste no Chromium (simulado) em: reabrir às 13:13, Recarregar, copiar arquivos novos e Recarregar, reiniciar o navegador, carregar de outra pasta (mesma chave e mesmo ID) e várias abas |
+| 7 | Com o armazenamento da extensão **vazio** às 13:13, a tela fica idêntica ao seu 2º print: nova consulta, 429, "recusas seguidas: 1" e pausa até 14:13 | Teste no Chromium (simulado) |
+
+### Hipóteses (não comprovadas)
+
+O armazenamento lido às 13:13 estava vazio. As causas possíveis estão fora do
+código da extensão:
+- a extensão foi removida e carregada de novo;
+- outro perfil do Chrome foi usado;
+- os dados foram limpos.
+
+Não é possível provar qual delas a partir dos prints. A remoção também não pôde
+ser automatizada aqui: a confirmação do Chrome não conclui sem tela.
+
+### O que a 15.2 corrige e acrescenta
+
+- **Defeito corrigido:** depois de um 429, o dashboard gravava a pausa sem a
+  trava usada pelo leitor. Numa corrida entre abas, a pausa mais curta podia
+  ficar por último. Agora todas as gravações usam uma trava única e são
+  repetidas 1 vez em caso de erro. Se mesmo assim a gravação falhar, o painel
+  avisa.
+- **Diagnóstico:** "Pausa salva no navegador" passa a vir do armazenamento.
+  Antes, vinha só da memória da aba e não provava que estava salva.
+- **Retry-After:** cada 429 mostra o valor recebido, ou "ausente".
+- **Prova de reinício:** o painel mostra "Estado salvo neste navegador desde". Se
+  essa data for posterior ao último 429, o estado foi apagado fora da extensão.
+- **Privacidade:** nenhum cookie, token ou cabeçalho é registrado. Isso é
+  verificado em teste.
+
+## 2. Origem do 429
+
+| Fato | Evidência |
 |---|---|
-| Modos Seguidores, Seguindo, Hashtag, Curtidas, Local e Lista | Corrigidos e validados de ponta a ponta, com respostas **simuladas** |
-| Histórico, retomada e exportações (todos os modos) | Corrigidos e validados, com respostas **simuladas** |
-| Modo Comment: e-mail do botão Contato → E-mail | **Não comprovado.** No seu teste real, o Instagram bloqueou a 1ª consulta (HTTP 429) |
+| Consulta recusada: `GET https://www.instagram.com/api/v1/users/web_profile_info/?username=<perfil>`, com os cookies da sua sessão | Linha "Consulta" do diagnóstico e código do leitor |
+| HTTP 429 na 1ª consulta, duas vezes (12:59:23 e 13:13:06), com 14 min de intervalo | Seus prints |
+| As duas pausas tiveram exatamente 60 min | Seus prints: 60 min é o padrão quando o Retry-After não vem; um Retry-After de 3600 s daria o mesmo |
+| A sessão estava ativa: a lista de comentários do mesmo post respondeu (47 perfis) | 1º print |
+| Mensagem do Instagram no 429 | **Não visível** nos prints; a 15.2 passa a mostrá-la quando vier |
 
-Para usar, basta instalar. As instruções estão no `LEIA-ME.txt`, dentro do ZIP.
+**Hipóteses:**
+- **Limite de consultas a essa rota para a sua conta ou rede.** É o que mais
+  combina com 429 na 1ª chamada duas vezes seguidas e com a outra rota
+  funcionando.
+- **Mudança do Instagram nessa rota para sessões logadas.** Há relatos públicos
+  de setembro de 2026 com o mesmo padrão.
 
-## Teste real (feito por você em 05/10/2026, 12:59)
+Sem acesso à sua sessão, não dá para separar as duas.
 
-| Etapa | Resultado real |
-|---|---|
-| Lista de comentários (post com 733 comentários) | Carregou: 47 perfis na 1ª página |
-| 1ª consulta de perfil (`web_profile_info`, @djrolandgonzales) | **HTTP 429** (limite do Instagram), sem Retry-After |
-| Reação da extensão | Pausa até 13:59:23 (60 min), linha marcada como falha de acesso, nenhuma repetição |
-| E-mail comercial | Nenhum: a consulta foi recusada antes de devolver o perfil |
+## 3. A consulta usada pode trazer o e-mail comercial?
 
-É o mesmo resultado da versão 13. A rota permitida no modo Comment está sendo
-recusada para a sua conta já na primeira chamada. Com as regras atuais (sem
-`/users/{id}/info/` no Comment e sem contornar limites), não existe outra rota
-permitida para esse e-mail.
+Pela evidência disponível, **não**:
 
-A versão 15.1 só corrige o contador da tela, que mostrava "0 perfis
-encontrados" com 47 listados. Agora mostra "47 perfis encontrados, 0
-consultados".
+- **Capturas públicas:** em cerca de 75 respostas reais publicadas por
+  terceiros, `web_profile_info` traz `business_email` **nulo** em todas as
+  capturas de 2022 em diante. Isso vale inclusive para sessões logadas e
+  perfis comerciais com botão de contato.
+- **Código do próprio Instagram:** o código web diz que os botões de contato
+  só aparecem no app do celular. A versão web não mostra "Contato → E-mail" de
+  outros perfis.
+- **Rota móvel:** nas capturas atuais, o e-mail aparece só em `public_email`
+  da API móvel `/users/{id}/info/`. Ela continua fora do modo Comment, como
+  você definiu.
 
-## O que foi corrigido nesta versão
-
-| # | Problema encontrado | Efeito antes | Agora |
-|---|---|---|---|
-| 1 | Comment: o histórico contava comentaristas **listados** como extraídos | Ao retomar depois de um 429, a extensão pulava quem nunca foi consultado. Na simulação foram 98 de 150; com o 429 na 1ª consulta, eram todos | Conta só perfis consultados. A retomada pula exatamente os já salvos. Contagens de versões antigas não são usadas |
-| 2 | Comment: o fim da lista marcava o histórico como "concluído" | O histórico ficava "concluído" com consultas pendentes | Só conclui quando todos foram consultados |
-| 3 | Histórico com linhas antigas de e-mail tirado da bio | A exportação pelo Histórico do popup ainda saía com esses e-mails | Linhas antigas são limpas ao retomar. O popup aplica a mesma regra e exporta "E-mail comercial" e "Status do e-mail" |
-| 4 | Retomada duplicava linhas | O mesmo perfil aparecia duas vezes no histórico | Um registro por perfil |
-| 5 | Filtro DJ decidia o que era salvo e quando terminava | Com o filtro ligado, a extração nunca concluía e perfis sumiam do histórico | O filtro só afeta a tabela e a exportação |
-| 6 | Perfil apagado (HTTP 404) nos outros modos | O perfil era consultado de novo, abria uma aba do Instagram e a extração nunca concluía | Vira "Perfil indisponível" e a fila segue. Com 3 seguidos, a fila pausa |
-| 7 | Contador de erros nunca zerava | Depois de 2 erros em qualquer ponto da extração, nenhum perfil ganhava mais nova tentativa | 1 nova tentativa por perfil. Se o erro persistir, a linha mostra a falha e a extração conclui |
-| 8 | Perfil renomeado entre a lista e o detalhe | Perdia o e-mail comercial ("Campo omitido") | É reconhecido pelo id e mantém o e-mail |
-| 9 | Lista de @perfis com nome inexistente | Gerava consulta com id vazio (`/users//info/`) | Vira "Perfil indisponível", sem consulta inválida |
-| 10 | Aba de sessão do instagram.com | No Comment, com 100, 200… comentaristas, abria uma aba a **cada** perfil | No máximo 1 aba a cada 100 perfis processados |
-| 11 | Pausa 429 salva por outro dashboard | Os outros modos ficavam parados até você clicar | Continuam sozinhos no fim da pausa. O Comment segue esperando o Iniciar |
-| 12 | Dois dashboards abertos | Um sobrescrevia o índice do histórico do outro, e a limpeza de 190 dias podia apagar histórico em uso | Gravação com trava e releitura do índice |
-| 13 | Texto de erro do Instagram nos avisos | Era exibido como HTML | Exibido como texto puro |
-
-As regras de 429 foram preservadas sem nenhuma mudança:
-
-- pausa compartilhada e salva pelo Retry-After, com 60 minutos quando ele não vem;
-- no modo Comment, sem repetição automática;
-- 1 consulta por vez e intervalo mínimo de 10 s;
-- `/users/{id}/info/` fora do modo Comment.
-
-## Testes
+## 4. Testes
 
 | Bateria | Real ou simulado | Resultado |
 |---|---|---|
-| Sintaxe (12 arquivos JS, manifest e traduções) | n/a | OK |
-| Unitários do parser e do leitor | Simulado | 41/41 |
-| Dados, histórico e exportação (código real do dashboard e do popup em Node) | Simulado | 12/12 (no PATCHED 14: 10 dos 12 falham, reproduzindo os defeitos) |
-| Ponta a ponta: dashboard real no Chromium, todos os modos, 27 cenários | Simulado (toda a rede interceptada) | 322/322 no PATCHED 15; 65/65 no reteste do 15.1 (4 cenários do Comment) |
-| Consulta ao Instagram, feita por você | **Real** | Lista de comentários OK; 1ª consulta de perfil: **HTTP 429**. Pausa respeitada, nada repetido |
+| Seu teste das 12:59 (PATCHED 15) | **Real** | Comentários OK; 1ª consulta de perfil: **HTTP 429**; pausa de 60 min, nada repetido |
+| Seu teste das 13:13 (PATCHED 15.1) | **Real** | 1ª consulta de perfil: **HTTP 429**. A pausa anterior não estava no armazenamento (seção 1) |
+| Consulta ao Instagram a partir deste ambiente | **Real** | **Nenhuma**: a política de rede do ambiente bloqueia o instagram.com, e não há sessão sua aqui |
+| Unitários do parser, do leitor e da gravação da pausa | Simulado | 46/46 |
+| Dados, histórico e exportação | Simulado | 12/12 |
+| Ponta a ponta no Chromium, todos os modos | Simulado | 359/359 verificações em 29 cenários |
+| Reprodução 12:59 → 13:13 (15.2 / 15.1) | Simulado | 15.2: 26/26 e armazenamento vazio 9/9. 15.1: 22/25; as 3 falhas são verificações que só existem na 15.2, e a pausa foi conservada |
+| Ciclo de vida do armazenamento (Recarregar, atualizar arquivos, reiniciar, outra pasta) | Simulado | Pausa e contador conservados em todos; a remoção não pôde ser automatizada |
 
-O detalhe de cada verificação está em `RESULTADOS-TESTES.txt`. Os testes ficam em `tests/` e podem ser rodados de novo.
+## 5. O que ficou de fora e por quê
 
-## Modo Comment: por que continua sem prova
-
-- Foram examinadas cerca de 75 respostas reais publicadas por terceiros. Em
-  todas as capturas web de 2022 em diante, `business_email` vem **nulo**,
-  inclusive em perfis comerciais com botão de contato.
-- O e-mail público só aparece em `public_email`, na API móvel
-  `/users/{id}/info/`. Ela continua fora do modo Comment, como você pediu.
-- Relatos de setembro de 2026 descrevem HTTP 429 já na primeira consulta
-  `web_profile_info`, o mesmo que você viu na versão 13.
-
-**Leitura honesta:** é provável que a rota permitida não entregue esse e-mail.
-A extensão prova o caso no primeiro uso real, gastando poucas consultas, e
-registra tudo nas abas de diagnóstico do XLSX.
-
-## Não alterado de propósito
-
-- A rota do modo Comment e todos os seus limites.
-- A verificação de limite de teste (trial) do fornecedor. Ela compara um valor
-  com ele mesmo e nunca dispara, mas é lógica de licença e ficou como estava.
+- **Teste real a partir deste ambiente:** a rede bloqueia o instagram.com e não
+  há sessão sua aqui. Os únicos resultados reais são os seus dois testes.
+- **Mudança nos cabeçalhos da consulta de perfil:** a política de segurança do
+  ambiente bloqueou essa alteração, que por isso não está na 15.2. A consulta
+  continua igual à da 15.1.
+- **`/users/{id}/info/` no modo Comment:** continua fora, como você definiu.
 
 ## Arquivos
 
 | Arquivo | Conteúdo |
 |---|---|
-| `Autland-IG-Extractor-PATCHED-15.1.zip` | Extensão completa (34 arquivos), com `LEIA-ME.txt` e `PATCH_NOTES.txt` |
-| `RESULTADOS-TESTES.txt` | Saída completa das três baterias |
-| `diffs/` | Diferenças 13→14 e 14→15.1 |
-| `tests/` | Testes unitários, de dados e ponta a ponta, com instruções |
+| `Autland-IG-Extractor-PATCHED-15.2.zip` | Extensão completa (34 arquivos) |
+| `RESULTADOS-TESTES.txt` | Saída completa dos testes |
+| `diffs/` | Diferenças 13→14 e 14→15.2 |
+| `tests/` | Testes unitários, de dados e ponta a ponta (com a reprodução 12:59 → 13:13) |

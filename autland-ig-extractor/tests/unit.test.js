@@ -1,4 +1,4 @@
-/* Unit tests for PATCHED 14 parser and reader. All responses are SIMULATED. */
+/* Unit tests for the PATCHED 14-15.2 parser and reader. All responses are SIMULATED. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
@@ -117,8 +117,7 @@ function deps(responses, opts = {}) {
   let clock = opts.now || 1_800_000_000_000;
   const calls = [];
   let active = 0, maxActive = 0;
-  const lockQueue = [];
-  let locked = false;
+  const lockState = {};
   return {
     store, calls, get maxActive() { return maxActive; }, advance(ms) { clock += ms; },
     d: {
@@ -127,10 +126,12 @@ function deps(responses, opts = {}) {
         get: async (keys) => { const out = {}; [].concat(keys).forEach((k) => { if (k in store) out[k] = JSON.parse(JSON.stringify(store[k])); }); return out; },
         set: async (obj) => { Object.assign(store, JSON.parse(JSON.stringify(obj))); },
       },
+      // Like navigator.locks: one queue per lock name (different names never block each other).
       locks: { request: async (name, fn) => {
-        while (locked) await new Promise((r) => lockQueue.push(r));
-        locked = true;
-        try { return await fn(); } finally { locked = false; const next = lockQueue.shift(); if (next) next(); }
+        const l = lockState[name] || (lockState[name] = { locked: false, queue: [] });
+        while (l.locked) await new Promise((r) => l.queue.push(r));
+        l.locked = true;
+        try { return await fn(); } finally { l.locked = false; const next = l.queue.shift(); if (next) next(); }
       } },
       fetch: async (url, init) => {
         active++; maxActive = Math.max(maxActive, active);
@@ -414,4 +415,58 @@ test('reader: a parada por decisão de rota informa o motivo', async () => {
   const blocked = { endpoint: 'instagram_web_profile_info', keysPresent: 3, found: 0, foundUsers: [], withheldProfessional: ['a', 'b', 'c'], omittedProfessional: [], omittedOther: 0 };
   const x = deps([], { store: { [K.schemaKey]: blocked } });
   await assert.rejects(R.create(x.d)('9', 'fila', null), (e) => e.stopCode === 'unsupported' && e.blockReason === 'withheld');
+});
+
+/* PATCHED 15.2: the shared pause is merged under a lock, never shortened, and a failed save is visible. */
+function slowStore(initial) {
+  // Storage whose get/set yield, so two tabs can interleave between read and write.
+  const data = Object.assign({}, initial);
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  return { data, get: async (k) => { await tick(); return { [k]: data[k] }; }, set: async (o) => { await tick(); Object.assign(data, o); } };
+}
+function realLock() {
+  const queues = {};
+  return { request: (name, fn) => { const prev = queues[name] || Promise.resolve(); const run = prev.then(() => fn()); queues[name] = run.catch(() => {}); return run; } };
+}
+test('pausa: duas abas gravando ao mesmo tempo nunca encurtam a pausa (com a trava)', async () => {
+  if (!R.saveCooldown) return; // PATCHED 15.1 or older
+  const store = slowStore({ ig_contact_cooldown_until: 0 });
+  const locks = realLock();
+  await Promise.all([R.saveCooldown(store, locks, 5000), R.saveCooldown(store, locks, 9000), R.saveCooldown(store, locks, 7000)]);
+  assert.equal(store.data.ig_contact_cooldown_until, 9000);
+});
+test('pausa: sem a trava, a mesma corrida perde a pausa maior (defeito corrigido)', async () => {
+  const store = slowStore({ ig_contact_cooldown_until: 0 });
+  // The pre-15.2 dashboard merge: read, then write max(saved, own), with no lock.
+  const unlocked = async (until) => { const saved = await store.get('ig_contact_cooldown_until'); await store.set({ ig_contact_cooldown_until: Math.max(saved.ig_contact_cooldown_until || 0, until) }); };
+  await Promise.all([unlocked(9000), unlocked(5000)]);
+  assert.equal(store.data.ig_contact_cooldown_until, 5000, 'a gravação mais lenta apagou a pausa maior');
+});
+test('pausa: uma pausa salva maior nunca é reduzida por um Retry-After menor', async () => {
+  if (!R.saveCooldown) return;
+  const store = slowStore({ ig_contact_cooldown_until: 50000 });
+  const value = await R.saveCooldown(store, realLock(), 20000);
+  assert.equal(value, 50000); assert.equal(store.data.ig_contact_cooldown_until, 50000);
+});
+test('pausa: falha passageira do armazenamento é repetida 1 vez; falha persistente é reportada', async () => {
+  if (!R.saveCooldown) return;
+  let fails = 1;
+  const flaky = { data: {}, get: async () => ({}), set: async (o) => { if (fails-- > 0) throw new Error('quota'); Object.assign(flaky.data, o); } };
+  assert.equal(await R.saveCooldown(flaky, realLock(), 1234, async () => {}), 1234);
+  assert.equal(flaky.data.ig_contact_cooldown_until, 1234);
+  const broken = { get: async () => { throw new Error('Extension context invalidated'); }, set: async () => {} };
+  await assert.rejects(R.saveCooldown(broken, realLock(), 1234, async () => {}));
+});
+test('leitor: 429 com armazenamento quebrado continua sendo 429 e registra pausa NÃO salva', async () => {
+  const storage = {
+    data: { ig_commercial_web_last_start: 0 },
+    get: async (keys) => { const out = {}; [].concat(keys).forEach((k) => { if (k in storage.data) out[k] = storage.data[k]; }); return out; },
+    set: async (o) => { if ('ig_contact_cooldown_until' in o) throw new Error('quota'); Object.assign(storage.data, o); },
+  };
+  const read = R.create({ contacts: P, storage, locks: realLock(), now: () => 1000000, wait: async () => {},
+    fetch: async () => ({ status: 429, ok: false, type: 'basic', headers: { get: () => null }, text: async () => '{}' }) });
+  await assert.rejects(read('', 'loja_x', null), (e) => e.stopCode === 'rate_limit' && e.cooldownUntil === 1000000 + 3600000);
+  const ev = storage.data.ig_commercial_contact_evidence_v14[0];
+  assert.equal(ev.http, 429); assert.equal(ev.retryAfter, null);
+  if (R.saveCooldown) assert.equal(ev.cooldownSaved, false);
 });

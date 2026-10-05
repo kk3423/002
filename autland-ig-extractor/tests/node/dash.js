@@ -28,9 +28,14 @@ function createEnv(extDir, opts = {}) {
     location: { href: 'chrome-extension://x/dashboard.html' },
   };
   sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox;
-  // serial lock like navigator.locks
-  let locked = false; const q = [];
-  sandbox.navigator.locks = { request: async (name, fn) => { while (locked) await new Promise((r) => q.push(r)); locked = true; try { return await fn(); } finally { locked = false; const n = q.shift(); if (n) n(); } } };
+  // Like navigator.locks: one serial queue per lock name.
+  const lockState = {};
+  sandbox.navigator.locks = { request: async (name, fn) => {
+    const l = lockState[name] || (lockState[name] = { locked: false, q: [] });
+    while (l.locked) await new Promise((r) => l.q.push(r));
+    l.locked = true;
+    try { return await fn(); } finally { l.locked = false; const n = l.q.shift(); if (n) n(); }
+  } };
   vm.createContext(sandbox);
   for (const f of ['chunk-vendors.js', 'chunk-common.js', 'dj-filter-engine.js', 'public-contact-parser.js', 'commercial-profile-reader.js', 'request-pacing.js']) {
     vm.runInContext(fs.readFileSync(path.join(extDir, f), 'utf8'), sandbox, { filename: f });

@@ -75,10 +75,10 @@ function parseResult(name, state, params, scenario) {
   }
 }
 
-async function launch(extDir, label) {
-  const udd = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-' + label + '-'));
+async function launch(extDir, label, options) {
+  const udd = (options && options.userDataDir) || fs.mkdtempSync(path.join(os.tmpdir(), 'pw-' + label + '-'));
   const ctx = await chromium.launchPersistentContext(udd, {
-    channel: 'chromium', headless: true, acceptDownloads: true,
+    channel: 'chromium', headless: true, acceptDownloads: true, timezoneId: (options && options.timezoneId) || undefined,
     args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`],
   });
   await ctx.addCookies([
@@ -122,7 +122,7 @@ async function install(ctx, scenario, log) {
   const state = { historyUpdates: 0, profileCalls: {} };
   await ctx.route('**/*', async (route) => {
     const req = route.request(), url = req.url(), t = Date.now();
-    if (url.startsWith('chrome-extension://') || url.startsWith('data:')) return route.continue();
+    if (url.startsWith('chrome-extension://') || url.startsWith('data:') || url.startsWith('chrome://')) return route.continue();
     const u = new URL(url);
     if (u.host === 'igemailextractor.echobot.dev' && u.pathname.startsWith('/parse/functions/')) {
       const name = u.pathname.split('/').pop();

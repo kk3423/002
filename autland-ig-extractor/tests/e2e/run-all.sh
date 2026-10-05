@@ -13,7 +13,7 @@ batches=(
   "falha_acesso:http403 falha_acesso:redirect falha_acesso:html tres_indisponiveis export_vazio"
   "seguidores seguidores_429 seguindo curtidas hashtag"
   "local lista lista_inexistente dj_filtro seguidores_pausa_salva"
-  "retomada_comment seguidores_falhas"
+  "retomada_comment seguidores_falhas pausa_1259_1313 armazenamento_vazio_1313"
 )
 i=0
 for b in "${batches[@]}"; do

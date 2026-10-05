@@ -1,6 +1,7 @@
 /* Usage: node run.js <extDir> <label> <scenario...>
  * All Instagram responses below are SIMULATED fixtures. */
 const H = require('./harness');
+const fs = require('fs'), os = require('os'), path = require('path');
 const PIXEL = H.PIXEL;
 
 function userBody(username, pk, extra) {
@@ -509,6 +510,146 @@ const SCENARIOS = {
     await o.ctx.close();
     return { scn: label + ':seguidores_falhas', s, log: o.log, errors: o.consoleErrors };
   },
+  async pausa_1259_1313(extDir, label) {
+    // Reproduces the real timeline: HTTP 429 at 12:59 (no Retry-After), pause until 13:59,
+    // dashboard reopened at 13:13. Also: extension Reload, files copied over the installed
+    // folder + Reload, several tabs at once, and the first allowed retry after 13:59.
+    const scn = label + ':pausa_1259_1313';
+    const live = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-live-'));
+    fs.cpSync(extDir, live, { recursive: true });
+    const comments = [{ pk: 141, username: 'djrolandgonzales' }, { pk: 142, username: 'leticiakubiak' }, { pk: 143, username: 'gonza.sosa.dj' }];
+    const profiles = {
+      djrolandgonzales: () => ({ status: 429, body: { message: 'Please wait a few minutes before you try again.', status: 'fail' } }),
+      leticiakubiak: F.businessFound('leticiakubiak', 142, 'l@loja.com'),
+      'gonza.sosa.dj': F.businessFound('gonza.sosa.dj', 143, 'g@loja.com'),
+    };
+    const log = [];
+    const { ctx, id } = await H.launch(live, 'p1259', { timezoneId: 'America/Sao_Paulo' });
+    await H.install(ctx, { comments, profiles, friendships: () => ({ status: 200, body: { status: 'ok', users: [], next_max_id: null, big_list: false } }) }, log);
+    await ctx.clock.install({ time: new Date('2026-10-05T12:59:00-03:00') });
+    await ctx.clock.resume();
+    const mgr = await ctx.newPage();
+    await mgr.goto('chrome://extensions/');
+    await mgr.evaluate(() => chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true }));
+    const reloadExtension = async () => { await mgr.evaluate((x) => chrome.developerPrivate.reload(x, { failQuietly: true }), id); await mgr.waitForTimeout(2000); };
+    const ig = () => log.filter((e) => ['comments', 'profile', 'info', 'friendships', 'list', 'instagram-other'].includes(e.kind));
+    const errors = [];
+    const openDash = async (hash) => {
+      const p = await ctx.newPage();
+      p.on('pageerror', (e) => errors.push(String(e)));
+      for (let i = 0; ; i++) {
+        try { await p.goto(`chrome-extension://${id}/dashboard.html#/${hash || '?ins=DdRmsyLOnoY&type=4'}`); break; }
+        catch (e) { if (i >= 20) throw e; await p.waitForTimeout(1000); }
+      }
+      await p.waitForTimeout(3500);
+      return p;
+    };
+    const pageNow = (p) => p.evaluate(() => Date.now());
+    const blockedChecks = async (p) => {
+      const snap = await H.snapshot(p);
+      const start = p.locator('button', { hasText: 'Iniciar' }).first();
+      const startDisabled = await start.isDisabled().catch(() => null);
+      if (startDisabled === false) await start.click().catch(() => {});
+      // The manual check, through the UI and through its handler directly.
+      const probe = p.locator('button', { hasText: 'Verificar 1 perfil' }).first();
+      const probeDisabled = await probe.isDisabled().catch(() => null);
+      await p.evaluate(`(() => { const vm = ${H.findVmSource()}; vm.contactProbeUsername = 'djrolandgonzales'; return vm.handleContactProbe(); })()`).catch(() => {});
+      await p.waitForTimeout(2500);
+      return { paused: snap.isPaused, startDisabled, probeDisabled, stored: Number(snap.storage.ig_contact_cooldown_until) || 0, text: snap.bodyText };
+    };
+    const out = { steps: {} };
+    // 12:59 — Iniciar: comment list, first profile, HTTP 429 without Retry-After.
+    const p1 = await openDash();
+    await H.clickButton(p1, 'Iniciar');
+    const s1 = await H.waitFor(p1, (x) => profileReqs(log).length >= 1 && x.isPaused && !x.detailCycle, { timeout: 120000 });
+    await p1.waitForTimeout(1500);
+    const s1b = await H.snapshot(p1);
+    const ev1 = (s1b.storage.ig_commercial_contact_evidence_v14 || [])[0] || {};
+    out.first = { reqs: profileReqs(log).length, ev: ev1, stored: Number(s1b.storage.ig_contact_cooldown_until) || 0,
+      refusals: (s1b.storage.ig_commercial_contact_schema_v14 || {}).refusals, since: s1b.storage.ig_contact_state_since,
+      diag: await p1.evaluate(`(() => { const vm = ${H.findVmSource()}; return vm.contactDiagnosticText; })()`) };
+    await p1.close();
+    // 13:13:06 — the dashboard is opened again.
+    await ctx.clock.setSystemTime(new Date('2026-10-05T13:13:06-03:00'));
+    let mark = ig().length;
+    const p2 = await openDash();
+    out.steps.reaberto = Object.assign(await blockedChecks(p2), { now: await pageNow(p2), reqs: ig().length - mark });
+    // Extension Reload (button in chrome://extensions).
+    mark = ig().length;
+    await reloadExtension();
+    const p3 = await openDash();
+    out.steps.recarregar = Object.assign(await blockedChecks(p3), { reqs: ig().length - mark });
+    // Newer files copied over the installed folder, then Reload.
+    mark = ig().length;
+    fs.cpSync(extDir, live, { recursive: true, force: true });
+    fs.appendFileSync(path.join(live, 'LEIA-ME.txt'), '\n');
+    await reloadExtension();
+    const p4 = await openDash();
+    out.steps.atualizar_arquivos = Object.assign(await blockedChecks(p4), { reqs: ig().length - mark });
+    // Several tabs at once: two Comment dashboards and one Followers dashboard.
+    mark = ig().length;
+    const tabs = [await openDash(), await openDash(), await openDash('?ins=alvo_loja&type=0')];
+    await tabs[0].waitForTimeout(8000);
+    const followers = await H.snapshot(tabs[2]);
+    out.steps.varias_abas = { reqs: ig().length - mark, followersPaused: followers.isPaused,
+      followersNotice: followers.notifications.some((n) => /cooldown is active/.test(n)) };
+    await tabs[2].close();
+    // 13:59:30 — after the pause: one click sends exactly one profile request; a new 429 stops it again.
+    await ctx.clock.setSystemTime(new Date('2026-10-05T13:59:30-03:00'));
+    await tabs[0].waitForTimeout(2500);
+    mark = ig().length;
+    const before = profileReqs(log).length;
+    const clicked = await H.clickButton(tabs[0], 'Iniciar');
+    const s5 = await H.waitFor(tabs[0], (x) => profileReqs(log).length > before && x.isPaused && !x.detailCycle, { timeout: 120000 });
+    await tabs[0].waitForTimeout(8000);
+    const s5b = await H.snapshot(tabs[0]);
+    const ev5 = (s5b.storage.ig_commercial_contact_evidence_v14 || [])[0] || {};
+    out.after = { clicked, profileReqs: profileReqs(log).length - before, igReqs: ig().length - mark, ev: ev5,
+      stored: Number(s5b.storage.ig_contact_cooldown_until) || 0, refusals: (s5b.storage.ig_commercial_contact_schema_v14 || {}).refusals,
+      otherTabPaused: (await H.snapshot(tabs[1])).isPaused };
+    await ctx.close();
+    return { scn, s: s5b, out, log, errors };
+  },
+  async armazenamento_vazio_1313(extDir, label) {
+    // Stand-in for "the extension's saved state was emptied between 12:59 and 13:13" (removed and
+    // added again, another Chrome profile...): reproduces the screens of the real test.
+    const scn = label + ':armazenamento_vazio_1313';
+    const comments = [{ pk: 141, username: 'djrolandgonzales' }, { pk: 142, username: 'leticiakubiak' }];
+    const profiles = { djrolandgonzales: () => ({ status: 429, body: { message: 'Please wait a few minutes before you try again.', status: 'fail' } }) };
+    const log = [];
+    const { ctx, id } = await H.launch(extDir, 'p1313', { timezoneId: 'America/Sao_Paulo' });
+    await H.install(ctx, { comments, profiles }, log);
+    await ctx.clock.install({ time: new Date('2026-10-05T12:59:00-03:00') });
+    await ctx.clock.resume();
+    const errors = [];
+    const openDash = async () => {
+      const p = await ctx.newPage();
+      p.on('pageerror', (e) => errors.push(String(e)));
+      for (let i = 0; ; i++) { try { await p.goto(`chrome-extension://${id}/dashboard.html#/?ins=DdRmsyLOnoY&type=4`); break; } catch (e) { if (i >= 20) throw e; await p.waitForTimeout(1000); } }
+      await p.waitForTimeout(3500);
+      return p;
+    };
+    const diagOf = (p) => p.evaluate(`(() => { const vm = ${H.findVmSource()}; return vm.contactDiagnosticText; })()`);
+    const p1 = await openDash();
+    await H.clickButton(p1, 'Iniciar');
+    await H.waitFor(p1, (x) => profileReqs(log).length >= 1 && x.isPaused && !x.detailCycle, { timeout: 120000 });
+    await p1.waitForTimeout(1500);
+    const first = await H.snapshot(p1);
+    await p1.evaluate(() => chrome.storage.local.clear());
+    await p1.close();
+    await ctx.clock.setSystemTime(new Date('2026-10-05T13:13:00-03:00'));
+    const p2 = await openDash();
+    const reopened = await H.snapshot(p2);
+    const startEnabled = await p2.locator('button', { hasText: 'Iniciar' }).first().isEnabled().catch(() => null);
+    const before = profileReqs(log).length;
+    await H.clickButton(p2, 'Iniciar');
+    await H.waitFor(p2, (x) => profileReqs(log).length > before && x.isPaused && !x.detailCycle, { timeout: 120000 });
+    await p2.waitForTimeout(1500);
+    const after = await H.snapshot(p2);
+    const diag = await diagOf(p2);
+    await ctx.close();
+    return { scn, s: after, first, reopened, startEnabled, reqsAfter: profileReqs(log).length - before, diag, log, errors };
+  },
   async identidade(extDir, label) {
     const scn = label + ':identidade';
     const comments = [{ pk: 41, username: 'renomeado' }, { pk: 42, username: 'loja_ok' }];
@@ -678,6 +819,35 @@ function assess(label, r) {
     check(scn, 'histórico local guarda os 3 perfis', rows.length === 3, rows.map((x) => x.userName));
     const last = r.state && r.state.lastHistory;
     check(scn, 'histórico no servidor: 3 extraídos, 3 e-mails, concluído', last && last.scrapedCount === 3 && last.count === 3 && last.isFromComplete === true, last && { scrapedCount: last.scrapedCount, count: last.count, done: last.isFromComplete });
+  }
+  if (/armazenamento_vazio_1313/.test(scn)) {
+    const hour = 3600000, brt = (ms) => new Date(ms - 3 * hour).toISOString().slice(11, 19);
+    const ev = (s.storage.ig_commercial_contact_evidence_v14 || [])[0] || {};
+    check(scn, 'com o armazenamento vazio às 13:13, a pausa de 12:59 não existe mais', !r.reopened.storage.ig_contact_cooldown_until && r.startEnabled === true, { stored: r.reopened.storage.ig_contact_cooldown_until, start: r.startEnabled });
+    check(scn, 'Iniciar envia de novo 1 consulta e recebe 429 (como no teste real)', r.reqsAfter === 1 && ev.http === 429, { reqs: r.reqsAfter, http: ev.http });
+    check(scn, 'mesma tela do teste real: "recusas seguidas: 1" e pausa até 14:13', (s.storage.ig_commercial_contact_schema_v14 || {}).refusals === 1 && brt(Number(s.storage.ig_contact_cooldown_until)).startsWith('14:13'), { refusals: (s.storage.ig_commercial_contact_schema_v14 || {}).refusals, until: brt(Number(s.storage.ig_contact_cooldown_until)) });
+    check(scn, '15.2: o diagnóstico prova o reinício (estado salvo desde 13:13)', /Estado salvo neste navegador desde: .*1:13|Estado salvo neste navegador desde: .*13:13/.test(r.diag), (r.diag.match(/Estado salvo[^\n]*/) || [''])[0].slice(0, 90));
+  }
+  if (/pausa_1259_1313/.test(scn)) {
+    const o = r.out, hour = 3600000, brt = (ms) => new Date(ms - 3 * hour).toISOString().slice(11, 19);
+    check(scn, '12:59: 1 consulta, HTTP 429 sem Retry-After', o.first.reqs === 1 && o.first.ev.http === 429 && !o.first.ev.retryAfter, { reqs: o.first.reqs, http: o.first.ev.http, ra: o.first.ev.retryAfter, at: o.first.ev.at && brt(o.first.ev.at) });
+    check(scn, '12:59: pausa de 60 min salva no navegador (até 13:59)', Math.abs(o.first.stored - (o.first.ev.at + hour)) < 3000 && o.first.ev.cooldownSaved === true, { stored: brt(o.first.stored), at: o.first.ev.at && brt(o.first.ev.at) });
+    check(scn, '12:59: contador de recusas = 1 e marcador do estado criado', o.first.refusals === 1 && Number(o.first.since) > 0, { refusals: o.first.refusals, since: o.first.since });
+    check(scn, 'diagnóstico mostra pausa salva no navegador e Retry-After ausente', /Pausa salva no navegador: até/.test(o.first.diag) && /Retry-After=ausente/.test(o.first.diag) && /Estado salvo neste navegador desde/.test(o.first.diag), o.first.diag.split('\n').slice(0, 4));
+    check(scn, 'diagnóstico não expõe cookie, token nem cabeçalhos', !/csrf|sessionid|ds_user_id|cookie|token/i.test(o.first.diag), o.first.diag.match(/.{0,30}(csrf|sessionid|ds_user_id|cookie|token).{0,30}/i));
+    for (const [k, v] of Object.entries(o.steps)) {
+      check(scn, `${k}: ZERO consultas ao Instagram durante a pausa`, v.reqs === 0, v.reqs);
+      if (k !== 'varias_abas') {
+        check(scn, `${k}: pausa conservada (até 13:59) e coleta pausada`, v.paused === true && v.stored === o.first.stored, { paused: v.paused, stored: v.stored && brt(v.stored) });
+        check(scn, `${k}: Iniciar e "Verificar 1 perfil" bloqueados`, v.startDisabled === true && v.probeDisabled === true, { start: v.startDisabled, probe: v.probeDisabled });
+      }
+    }
+    check(scn, 'reaberto às 13:13:06 (relógio da página)', brt(o.steps.reaberto.now).startsWith('13:13'), brt(o.steps.reaberto.now));
+    check(scn, 'várias abas: Seguidores também respeita a pausa salva', o.steps.varias_abas.followersPaused === true && o.steps.varias_abas.followersNotice === true, o.steps.varias_abas);
+    check(scn, '13:59:30: Iniciar volta a funcionar e envia 1 única consulta de perfil', o.after.clicked === true && o.after.profileReqs === 1, o.after);
+    check(scn, '13:59:30: novo 429 conta 2 recusas seguidas (contador persistiu)', o.after.refusals === 2 && o.after.ev.http === 429, { refusals: o.after.refusals });
+    check(scn, '13:59:30: nova pausa de 60 min salva (até 14:59)', Math.abs(o.after.stored - (o.after.ev.at + hour)) < 3000, { stored: o.after.stored && brt(o.after.stored) });
+    check(scn, 'a outra aba do Comment continuou pausada', o.after.otherTabPaused === true);
   }
   if (/export_vazio/.test(scn)) {
     check(scn, 'linhas carregadas sem nenhuma consulta de perfil concluída', s.rows.length === 2 && s.rows.every((x) => !x.detailLoaded), s.rows.map((x) => x.detailLoaded));
