@@ -50,6 +50,13 @@ function spacingOk(log) {
   return true;
 }
 function commonChecks(scn, log) {
+  if (/seguidores|seguindo|curtidas|hashtag|local|lista|dj_filtro|pausa_salva|falhas/.test(scn)) {
+    check(scn, 'nenhum host externo não simulado', !log.some((e) => e.kind === 'blocked'), log.filter((e) => e.kind === 'blocked').map((e) => e.url).slice(0, 5));
+    const ts = infoReqs(log).map((e) => e.t);
+    check(scn, 'intervalo >= 10 s entre consultas de detalhe', ts.every((t, i) => i === 0 || t - ts[i - 1] >= 9900), ts);
+    check(scn, 'detalhe com app-id web e sem troca de User-Agent', infoReqs(log).every((e) => e.headers['x-ig-app-id'] === '936619743392459' && !/Instagram \d|Android/.test(e.headers['user-agent'] || '')));
+    return;
+  }
   check(scn, 'nenhuma chamada a /users/{id}/info/', !log.some((e) => e.kind === 'FORBIDDEN_users_info'));
   check(scn, 'nenhum host externo não simulado', !log.some((e) => e.kind === 'blocked'), log.filter((e) => e.kind === 'blocked').map((e) => e.url).slice(0, 5));
   check(scn, 'intervalo >= 10 s entre consultas de perfil', spacingOk(log), profileReqs(log).map((e) => e.t));
@@ -59,7 +66,8 @@ function commonChecks(scn, log) {
 async function open(extDir, label, scenario) {
   const log = [];
   const { ctx, id } = await H.launch(extDir, label);
-  await H.install(ctx, scenario, log);
+  const state = await H.install(ctx, scenario, log);
+  Object.defineProperty(log, 'historyState', { get: () => state.lastHistory || {} });
   const page = await ctx.newPage();
   const consoleErrors = [];
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
@@ -71,6 +79,46 @@ async function open(extDir, label, scenario) {
   return { ctx, id, page, log, consoleErrors };
 }
 const settled = (s) => s.isComplete || (s.isPaused && !s.detailCycle);
+async function openMode(extDir, label, scenario, type, ins, seed) {
+  const log = [];
+  const { ctx, id } = await H.launch(extDir, label);
+  const state = await H.install(ctx, scenario, log);
+  const page = await ctx.newPage();
+  const consoleErrors = [];
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  if (seed) {
+    // Same storage write the popup does before opening a "user list" extraction.
+    for (let i = 0; ; i++) {
+      try { await page.goto(`chrome-extension://${id}/popup.html`); break; }
+      catch (e) { if (i >= 20) throw e; await page.waitForTimeout(1000); }
+    }
+    await page.evaluate((s) => chrome.storage.local.set(s), seed);
+    consoleErrors.length = 0;
+  }
+  for (let i = 0; ; i++) {
+    try { await page.goto(`chrome-extension://${id}/dashboard.html#/?ins=${encodeURIComponent(ins)}&type=${type}`); break; }
+    catch (e) { if (i >= 20) throw e; await page.waitForTimeout(1000); }
+  }
+  await page.waitForTimeout(2500);
+  return { ctx, id, page, log, consoleErrors, state };
+}
+async function listMode(extDir, label, name, type, ins, scenario, rows, seed) {
+  const o = await openMode(extDir, name, scenario, type, ins, seed);
+  const s = await H.waitFor(o.page, (x) => x.rows.length === rows && x.rows.every((r) => r.detailLoaded) && x.isComplete, { timeout: 240000, every: 2000 });
+  const csvEmail = s.emailList.length ? await H.exportCsv(o.page, 'email').catch((e) => 'ERRO ' + e) : '';
+  const csvAll = s.rows.length ? await H.exportCsv(o.page, 'all').catch((e) => 'ERRO ' + e) : '';
+  const xlsx = s.rows.length ? await H.exportXlsxSheets(o.page, 'all').catch(() => ({})) : {};
+  const storageAfter = await o.page.evaluate(() => chrome.storage.local.get(null));
+  await o.ctx.close();
+  return { scn: label + ':' + name, s, csvEmail, csvAll, xlsx, storageAfter, log: o.log, errors: o.consoleErrors, state: o.state };
+}
+const infoReqs = (log) => log.filter((e) => e.kind === 'info');
+const mobileUser = (pk, username, extra) => ({ status: 200, body: { status: 'ok', user: Object.assign({
+  pk: String(pk), username, full_name: 'Nome ' + username, profile_pic_url: PIXEL, follower_count: 120, following_count: 80,
+  media_count: 9, is_private: false, is_verified: false, external_url: '', biography: '', city_name: '', address_street: '',
+  contact_phone_number: '', public_phone_number: '', public_phone_country_code: '' }, extra || {}) } });
+const followersTarget = (pk) => () => ({ status: 200, body: { status: 'ok', data: { user: { pk: String(pk), id: String(pk), username: 'alvo_loja',
+  full_name: 'Alvo', profile_pic_url: PIXEL, follower_count: 3, following_count: 2, is_private: false } } } });
 
 const SCENARIOS = {
   async tipos_mistos(extDir, label) {
@@ -284,6 +332,183 @@ const SCENARIOS = {
     await o.ctx.close();
     return { scn, s, xlsx, csv, after, log: o.log, errors: o.consoleErrors };
   },
+  async seguidores(extDir, label) {
+    const scn = label + ':seguidores';
+    const users = [{ pk: '9101', username: 'seg_loja' }, { pk: '9102', username: 'seg_pessoa' }, { pk: '9103', username: 'seg_criador' }];
+    const o = await openMode(extDir, 'fol', {
+      profiles: { alvo_loja: followersTarget(9000) },
+      friendships: (kind) => ({ status: 200, body: { status: 'ok', users: users.map((x) => Object.assign({ full_name: 'Nome ' + x.username, profile_pic_url: PIXEL }, x)), next_max_id: null, big_list: false } }),
+      info: {
+        9101: () => mobileUser(9101, 'seg_loja', { account_type: 2, is_business: true, public_email: 'vendas@segloja.com.br', should_show_public_contacts: true, biography: 'bio: outro@bio.com', contact_phone_number: '11987654321', public_phone_country_code: '55' }),
+        9102: () => mobileUser(9102, 'seg_pessoa', { account_type: 1, is_business: false, public_email: '', biography: 'me chama: pessoa@gmail.com' }),
+        9103: () => mobileUser(9103, 'seg_criador', { account_type: 3, is_business: false, public_email: 'criador@x.com', should_show_public_contacts: true }),
+      },
+    }, 0, 'alvo_loja');
+    const s = await H.waitFor(o.page, (x) => x.rows.length === 3 && x.rows.every((r) => r.detailLoaded) && x.isComplete, { timeout: 200000, every: 2000 });
+    const csv = s.rows.length ? await H.exportCsv(o.page, 'email').catch(() => '') : '';
+    await o.ctx.close();
+    return { scn, s, csv, log: o.log, errors: o.consoleErrors };
+  },
+  async seguidores_429(extDir, label) {
+    const scn = label + ':seguidores_429';
+    const users = [{ pk: '9201', username: 'loja_um' }, { pk: '9202', username: 'loja_dois' }];
+    const o = await openMode(extDir, 'f429', {
+      profiles: { alvo_loja: followersTarget(9000) },
+      friendships: () => ({ status: 200, body: { status: 'ok', users: users.map((x) => Object.assign({ full_name: 'N', profile_pic_url: PIXEL }, x)), next_max_id: null, big_list: false } }),
+      info: {
+        9201: (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '5' }, body: { status: 'fail', message: 'Please wait a few minutes before you try again.' } }
+          : mobileUser(9201, 'loja_um', { account_type: 2, is_business: true, public_email: 'um@loja.com', should_show_public_contacts: true })),
+        9202: () => mobileUser(9202, 'loja_dois', { account_type: 2, is_business: true, public_email: 'dois@loja.com', should_show_public_contacts: true }),
+      },
+    }, 0, 'alvo_loja');
+    const s = await H.waitFor(o.page, (x) => x.rows.length === 2 && x.rows.every((r) => r.detailLoaded), { timeout: 260000, every: 3000 });
+    await o.ctx.close();
+    return { scn, s, log: o.log, errors: o.consoleErrors };
+  },
+  async seguindo(extDir, label) {
+    const users = [{ pk: '9701', username: 'sgd_loja' }, { pk: '9702', username: 'sgd_pessoa' }];
+    const r = await listMode(extDir, label, 'seguindo', 1, 'alvo_loja', {
+      profiles: { alvo_loja: followersTarget(9000) },
+      friendships: (kind) => ({ status: 200, body: { status: 'ok', users: kind === 'following' ? users.map((x) => Object.assign({ full_name: 'Nome ' + x.username, profile_pic_url: PIXEL }, x)) : [], next_max_id: null, big_list: false } }),
+      info: {
+        9701: () => mobileUser(9701, 'sgd_loja', { account_type: 2, is_business: true, public_email: 'sgd@loja.com', should_show_public_contacts: true }),
+        9702: () => mobileUser(9702, 'sgd_pessoa', { account_type: 1, is_business: false, public_email: 'nao@coletar.com' }),
+      },
+    }, 2);
+    return r;
+  },
+  async curtidas(extDir, label) {
+    return listMode(extDir, label, 'curtidas', 3, 'POSTCURTIDAS', {
+      listUsers: [{ pk: 9301, username: 'cur_loja' }, { pk: 9302, username: 'cur_pessoa' }, { pk: 9303, username: 'cur_oculto' }],
+      info: {
+        9301: () => mobileUser(9301, 'cur_loja', { account_type: 2, is_business: true, public_email: 'contato@curloja.com', should_show_public_contacts: true, biography: 'orçamento: bio@curloja.com', contact_phone_number: '11911112222', public_phone_country_code: '55' }),
+        9302: () => mobileUser(9302, 'cur_pessoa', { account_type: 1, is_business: false, public_email: 'residual@pessoal.com', biography: 'pessoa@gmail.com' }),
+        9303: () => mobileUser(9303, 'cur_oculto', { account_type: 3, is_business: false, public_email: 'oculto@criador.com', should_show_public_contacts: false }),
+      },
+    }, 3);
+  },
+  async hashtag(extDir, label) {
+    // The same author twice in the tag feed must become a single row.
+    return listMode(extDir, label, 'hashtag', 2, 'modatestebr', {
+      listUsers: [{ pk: 9401, username: 'tag_loja' }, { pk: 9401, username: 'tag_loja' }, { pk: 9402, username: 'tag_vazia' }],
+      info: {
+        9401: () => mobileUser(9401, 'tag_loja', { account_type: 2, is_business: true, public_email: 'tag@loja.com', should_show_public_contacts: true }),
+        9402: () => mobileUser(9402, 'tag_vazia', { account_type: 2, is_business: true, public_email: '', should_show_public_contacts: true }),
+      },
+    }, 2);
+  },
+  async local(extDir, label) {
+    return listMode(extDir, label, 'local', 5, '213385402', {
+      listUsers: [{ pk: 9501, username: 'loc_loja' }, { pk: 9502, username: 'loc_sumiu' }, { pk: 9503, username: 'loc_criador' }],
+      info: {
+        9501: () => mobileUser(9501, 'loc_loja', { account_type: 2, is_business: true, public_email: 'loc@loja.com', should_show_public_contacts: true, city_name: 'Campinas' }),
+        // 9502 has no fixture: the harness answers 404 "User not found".
+        9503: () => mobileUser(9503, 'loc_criador', { account_type: 3, is_business: false, public_email: 'criador@loc.com', should_show_public_contacts: true }),
+      },
+    }, 3);
+  },
+  async lista(extDir, label) {
+    const key = 'userlist-2-20261005000000';
+    const webUser = (pk, username) => () => ({ status: 200, body: { data: { user: { pk: String(pk), id: String(pk), username, full_name: 'Nome ' + username, profile_pic_url: PIXEL } }, status: 'ok' } });
+    const r = await listMode(extDir, label, 'lista', 6, key, {
+      profiles: { lista_loja: webUser(9601, 'lista_loja'), lista_pessoa: webUser(9602, 'lista_pessoa') },
+      info: {
+        9601: () => mobileUser(9601, 'lista_loja', { account_type: 2, is_business: true, public_email: 'lista@loja.com', should_show_public_contacts: true }),
+        9602: () => mobileUser(9602, 'lista_pessoa', { account_type: 1, is_business: false, public_email: '', biography: 'contato: eu@gmail.com' }),
+      },
+    }, 2, { [key]: 'lista_loja,lista_pessoa' });
+    r.key = key;
+    return r;
+  },
+  async retomada_comment(extDir, label) {
+    // Session 1 checks 1 profile, gets 429 on the 2nd; session 2 resumes the same history.
+    const scn = label + ':retomada_comment';
+    const comments = [{ pk: 131, username: 'ret_um' }, { pk: 132, username: 'ret_dois' }, { pk: 133, username: 'ret_tres' }];
+    const profiles = {
+      ret_um: F.businessFound('ret_um', 131, 'um@ret.com'),
+      ret_dois: (n) => (n === 1 ? F.rate429(2)() : F.businessFound('ret_dois', 132, 'dois@ret.com')()),
+      ret_tres: F.businessFound('ret_tres', 133, 'tres@ret.com'),
+    };
+    const scenario = { comments, profiles };
+    const o = await open(extDir, 'ret', scenario);
+    o.page.on('dialog', (d) => d.accept().catch(() => {}));
+    await H.clickButton(o.page, 'Iniciar');
+    const s1 = await H.waitFor(o.page, (x) => profileReqs(o.log).length >= 2 && x.isPaused && !x.detailCycle, { timeout: 120000 });
+    await o.page.waitForTimeout(5000);
+    const historyS1 = Object.assign({}, o.log.historyState);
+    const reqs1 = profileReqs(o.log).map((e) => e.username);
+    scenario.resumeHistory = true;
+    await o.page.goto(`chrome-extension://${o.id}/dashboard.html#/?ins=POSTTEST&type=4&history=histTest`);
+    await o.page.reload();
+    await o.page.waitForTimeout(4000);
+    // The reader keeps at least 10 s of pause after a 429: wait for it before starting again.
+    const resumed = await H.waitFor(o.page, (x) => Date.now() > (Number(x.storage.ig_contact_cooldown_until) || 0) + 1500, { timeout: 60000, every: 1000 });
+    await o.page.waitForTimeout(1500);
+    const startClicked = await H.clickButton(o.page, 'Iniciar');
+    const s2 = await H.waitFor(o.page, (x) => x.isComplete || (x.isPaused && !x.detailCycle && Date.now() - (profileReqs(o.log).slice(-1)[0] || { t: 0 }).t > 30000), { timeout: 150000, every: 2000 });
+    const stored = Object.entries(s2.storage).filter(([k]) => /^extract_list_/.test(k)).map(([, v]) => v)[0] || [];
+    await o.ctx.close();
+    return { scn, s: s2, s1, resumed, reqs1, stored, historyS1, startClicked, log: o.log, errors: o.consoleErrors };
+  },
+  async lista_inexistente(extDir, label) {
+    const key = 'userlist-2-20261005000001';
+    const webUser = (pk, username) => () => ({ status: 200, body: { data: { user: { pk: String(pk), id: String(pk), username, full_name: 'Nome ' + username, profile_pic_url: PIXEL } }, status: 'ok' } });
+    const r = await listMode(extDir, label, 'lista_inexistente', 6, key, {
+      profiles: { nome_ok: webUser(9801, 'nome_ok'), nome_sumiu: () => ({ status: 404, body: { data: { user: null }, status: 'ok' } }) },
+      info: { 9801: () => mobileUser(9801, 'nome_ok', { account_type: 2, is_business: true, public_email: 'ok@nome.com', should_show_public_contacts: true }) },
+    }, 2, { [key]: 'nome_ok,nome_sumiu' });
+    return r;
+  },
+  async dj_filtro(extDir, label) {
+    // The DJ display filter is switched on mid-run: it must not decide what is saved or when the task ends.
+    const users = [{ pk: '9901', username: 'dj_set_oficial' }, { pk: '9902', username: 'loja_roupas' }, { pk: '9903', username: 'padaria_bairro' }];
+    const o = await openMode(extDir, 'djf', {
+      profiles: { alvo_loja: followersTarget(9000) },
+      friendships: () => ({ status: 200, body: { status: 'ok', users: users.map((x) => Object.assign({ full_name: 'Nome ' + x.username, profile_pic_url: PIXEL }, x)), next_max_id: null, big_list: false } }),
+      info: {
+        9901: () => mobileUser(9901, 'dj_set_oficial', { account_type: 2, is_business: true, public_email: 'booking@djset.com', should_show_public_contacts: true, follower_count: 12000, biography: 'DJ / producer — afro house, melodic techno. Bookings worldwide', external_url: 'https://soundcloud.com/djset' }),
+        9902: () => mobileUser(9902, 'loja_roupas', { account_type: 2, is_business: true, public_email: 'vendas@roupas.com', should_show_public_contacts: true, biography: 'fashion store' }),
+        9903: () => mobileUser(9903, 'padaria_bairro', { account_type: 2, is_business: true, public_email: 'pao@padaria.com', should_show_public_contacts: true, biography: 'food' }),
+      },
+    }, 0, 'alvo_loja');
+    await o.page.evaluate(`(() => { const vm = ${H.findVmSource()}; vm.djFilterEnabled = true; vm.djMinScore = 60; })()`);
+    const s = await H.waitFor(o.page, (x) => x.isComplete, { timeout: 200000, every: 2000 });
+    const view = await o.page.evaluate(`(() => { const vm = ${H.findVmSource()}; return { userList: vm.userList.map(r => r.userName), processed: vm.processedList.length }; })()`);
+    const storageAfter = await o.page.evaluate(() => chrome.storage.local.get(null));
+    await o.ctx.close();
+    return { scn: label + ':dj_filtro', s, view, storageAfter, state: o.state, log: o.log, errors: o.consoleErrors };
+  },
+  async seguidores_pausa_salva(extDir, label) {
+    // A 429 cooldown saved by another dashboard: no request before it ends, then the run resumes by itself.
+    const until = Date.now() + 40000;
+    const users = [{ pk: '9111', username: 'ps_loja' }];
+    const o = await openMode(extDir, 'fps', {
+      profiles: { alvo_loja: followersTarget(9000) },
+      friendships: () => ({ status: 200, body: { status: 'ok', users: users.map((x) => Object.assign({ full_name: 'Nome ' + x.username, profile_pic_url: PIXEL }, x)), next_max_id: null, big_list: false } }),
+      info: { 9111: () => mobileUser(9111, 'ps_loja', { account_type: 2, is_business: true, public_email: 'ps@loja.com', should_show_public_contacts: true }) },
+    }, 0, 'alvo_loja', { ig_contact_cooldown_until: until });
+    const early = await H.snapshot(o.page);
+    const s = await H.waitFor(o.page, (x) => x.isComplete, { timeout: 220000, every: 3000 });
+    await o.ctx.close();
+    return { scn: label + ':seguidores_pausa_salva', s, early, until, log: o.log, errors: o.consoleErrors };
+  },
+  async seguidores_falhas(extDir, label) {
+    // HTTP 500 once (retried, then OK), HTTP 500 always (retried once, then recorded as failure), then OK.
+    const users = [{ pk: '9121', username: 'falha_uma_vez' }, { pk: '9122', username: 'falha_sempre' }, { pk: '9123', username: 'sem_falha' }];
+    const err = { status: 500, body: { status: 'fail', message: 'server error' } };
+    const o = await openMode(extDir, 'ffl', {
+      profiles: { alvo_loja: followersTarget(9000) },
+      friendships: () => ({ status: 200, body: { status: 'ok', users: users.map((x) => Object.assign({ full_name: 'Nome ' + x.username, profile_pic_url: PIXEL }, x)), next_max_id: null, big_list: false } }),
+      info: {
+        9121: (n) => (n === 1 ? err : mobileUser(9121, 'falha_uma_vez', { account_type: 2, is_business: true, public_email: 'um@falha.com', should_show_public_contacts: true })),
+        9122: () => err,
+        9123: () => mobileUser(9123, 'sem_falha', { account_type: 2, is_business: true, public_email: 'ok@semfalha.com', should_show_public_contacts: true }),
+      },
+    }, 0, 'alvo_loja');
+    const s = await H.waitFor(o.page, (x) => x.isComplete, { timeout: 260000, every: 3000 });
+    await o.ctx.close();
+    return { scn: label + ':seguidores_falhas', s, log: o.log, errors: o.consoleErrors };
+  },
   async identidade(extDir, label) {
     const scn = label + ':identidade';
     const comments = [{ pk: 41, username: 'renomeado' }, { pk: 42, username: 'loja_ok' }];
@@ -359,6 +584,99 @@ function assess(label, r) {
     check(scn, 'parou após 1 consulta, sem repetição automática', profileReqs(log).length === 1 && s.isPaused, profileReqs(log).length);
     check(scn, `linha marcada com falha (${code})`, s.rows[0] && s.rows[0].failure && s.rows[0].failure.code === code && !s.rows[0].detailLoaded, s.rows[0] && s.rows[0].failure);
     check(scn, 'próximo perfil não consultado', !profileReqs(log).some((e) => e.username === 'perfil_seguinte'));
+  }
+  if (/seguidores_falhas/.test(scn)) {
+    const n = (pk) => infoReqs(log).filter((e) => e.pk === pk).length;
+    check(scn, 'erro passageiro: 1 nova tentativa e sucesso', n('9121') === 2 && byUser.falha_uma_vez && byUser.falha_uma_vez.status === 'found', { reqs: n('9121') });
+    const sempre = s.rows.find((x) => x.id === '9122');
+    check(scn, 'erro persistente: 2 tentativas, linha marcada como falha', n('9122') === 2 && sempre && sempre.failure && sempre.failure.code === 'request' && /Falha/.test(sempre.text), { reqs: n('9122'), row: sempre });
+    check(scn, 'fila segue e conclui', byUser.sem_falha && byUser.sem_falha.status === 'found' && s.isComplete === true);
+    check(scn, 'e-mails só dos perfis respondidos', JSON.stringify(s.emailList.slice().sort()) === JSON.stringify(['ok@semfalha.com', 'um@falha.com']), s.emailList);
+  }
+  if (/seguidores_pausa_salva/.test(scn)) {
+    const ig = log.filter((e) => ['profile', 'info', 'friendships', 'list'].includes(e.kind));
+    check(scn, 'pausa salva respeitada: nenhuma consulta ao Instagram antes do fim', ig.length > 0 && ig.every((e) => e.t >= r.until), ig.map((e) => [e.kind, e.t - r.until]));
+    check(scn, 'dashboard começa pausado com aviso da pausa', r.early.isPaused && r.early.notifications.some((n) => /cooldown is active/.test(n)), r.early.notifications);
+    check(scn, 'retoma sozinho depois da pausa e conclui', s.isComplete === true && JSON.stringify(s.emailList) === JSON.stringify(['ps@loja.com']), s.emailList);
+  }
+  if (/seguidores_429/.test(scn)) {
+    const um = infoReqs(log).filter((e) => e.pk === '9201');
+    check(scn, '429 respeitado: 2ª tentativa só depois do Retry-After', um.length === 2 && um[1].t - um[0].t >= 5000, um.map((e) => e.t));
+    check(scn, 'sem martelar: no máximo 2 consultas ao perfil limitado', um.length <= 2);
+    check(scn, 'retoma sozinho fora do Comment e conclui', r.s.rows.every((x) => x.detailLoaded) && JSON.stringify(r.s.emailList.sort()) === JSON.stringify(['dois@loja.com', 'um@loja.com']), r.s.emailList);
+    check(scn, 'pausa compartilhada gravada', Number(r.s.storage.ig_contact_cooldown_until) > 0);
+  } else if (/:seguidores$/.test(scn)) {
+    const by = Object.fromEntries(s.rows.map((x) => [x.user, x]));
+    check(scn, 'lista de seguidores carregada (3 linhas)', s.rows.length === 3, s.rows.map((x) => x.user));
+    check(scn, 'detalhe consultado 1 vez por seguidor', infoReqs(log).length === 3 && infoReqs(log).every((e) => e.n === 1), infoReqs(log).map((e) => e.pk));
+    check(scn, 'e-mails só de public_email (bio ignorada)', JSON.stringify(s.emailList.slice().sort()) === JSON.stringify(['criador@x.com', 'vendas@segloja.com.br']), s.emailList);
+    check(scn, 'status: encontrado / pessoal / encontrado', by.seg_loja && by.seg_loja.status === 'found' && by.seg_pessoa.status === 'not_professional' && by.seg_criador.status === 'found', s.rows.map((x) => x.status));
+    check(scn, 'telefone público preservado', s.rows.some((x) => x.user === 'seg_loja'));
+    check(scn, 'extração concluída', s.isComplete === true);
+    check(scn, 'CSV de e-mails com a coluna certa', /vendas@segloja\.com\.br/.test(r.csv) && !/pessoa@gmail\.com|outro@bio\.com/.test((r.csv.split('\n')[1] || '').split(',').slice(0, 8).join(',')));
+  }
+  if (/:(seguindo|curtidas|hashtag|local|lista|lista_inexistente)$/.test(scn)) {
+    const mode = scn.split(':')[1];
+    const exp = {
+      seguindo: { rows: ['sgd_loja', 'sgd_pessoa'], emails: ['sgd@loja.com'], status: { sgd_loja: 'found', sgd_pessoa: 'not_professional' } },
+      curtidas: { rows: ['cur_loja', 'cur_pessoa', 'cur_oculto'], emails: ['contato@curloja.com'], status: { cur_loja: 'found', cur_pessoa: 'not_professional', cur_oculto: 'hidden' } },
+      hashtag: { rows: ['tag_loja', 'tag_vazia'], emails: ['tag@loja.com'], status: { tag_loja: 'found', tag_vazia: 'empty' } },
+      local: { rows: ['loc_loja', '', 'loc_criador'], emails: ['criador@loc.com', 'loc@loja.com'], status: { loc_loja: 'found', loc_criador: 'found' } },
+      lista_inexistente: { rows: ['nome_ok', 'nome_sumiu'], emails: ['ok@nome.com'], status: { nome_ok: 'found', nome_sumiu: 'profile_unavailable' }, info: 1 },
+      lista: { rows: ['lista_loja', 'lista_pessoa'], emails: ['lista@loja.com'], status: { lista_loja: 'found', lista_pessoa: 'not_professional' } },
+    }[mode];
+    check(scn, `lista carregada (${exp.rows.length} linhas, sem duplicar autor)`, JSON.stringify(s.rows.map((x) => x.user)) === JSON.stringify(exp.rows), s.rows.map((x) => x.user));
+    const ids = infoReqs(log).map((e) => e.pk);
+    check(scn, 'detalhe consultado 1 vez por perfil', ids.length === (exp.info || exp.rows.length) && new Set(ids).size === ids.length, ids);
+    check(scn, 'e-mails só do contato público (bio, pessoal e oculto fora)', JSON.stringify(s.emailList.slice().sort()) === JSON.stringify(exp.emails), s.emailList);
+    Object.keys(exp.status).forEach((u) => check(scn, `status ${u} = ${exp.status[u]}`, byUser[u] && byUser[u].status === exp.status[u], byUser[u] && { status: byUser[u].status, text: byUser[u].text }));
+    check(scn, 'extração concluída', s.isComplete === true);
+    check(scn, 'histórico no servidor atualizado', r.state && r.state.historyUpdates >= 2, r.state && r.state.historyUpdates);
+    check(scn, 'histórico local salvo (extract_list_*)', Object.keys(r.storageAfter).some((k) => /^extract_list_/.test(k) && Array.isArray(r.storageAfter[k]) && r.storageAfter[k].length === exp.rows.length), Object.keys(r.storageAfter));
+    const emailCol = (csv) => { const rows = parseCsv(csv); const i = (rows[0] || []).indexOf('E-mail comercial'); return rows.slice(1).map((x) => x[i]).filter(Boolean); };
+    check(scn, 'CSV de e-mails: coluna "E-mail comercial" correta', JSON.stringify(emailCol(r.csvEmail).sort()) === JSON.stringify(exp.emails), r.csvEmail.slice(0, 300));
+    check(scn, 'CSV completo: todas as linhas e status', parseCsv(r.csvAll.trim()).length === exp.rows.length + 1 && /Status do e-mail/.test(r.csvAll), r.csvAll.slice(0, 200));
+    const sheets = r.xlsx || {};
+    const data = sheets.all || [];
+    const ei = (data[0] || []).indexOf('E-mail comercial');
+    check(scn, 'XLSX: só a aba de dados (diagnóstico é exclusivo do Comment)', Object.keys(sheets).length === 1 && data.length === exp.rows.length + 1, Object.keys(sheets));
+    check(scn, 'XLSX: coluna E-mail comercial correta', JSON.stringify(data.slice(1).map((x) => x[ei]).filter(Boolean).sort()) === JSON.stringify(exp.emails));
+    if (mode === 'curtidas') check(scn, 'telefone público preservado', s.rows.some((x) => x.user === 'cur_loja'));
+    if (mode === 'seguindo') check(scn, 'lista lida de following (não de followers)', log.some((e) => e.kind === 'friendships' && e.list === 'following') && !log.some((e) => e.kind === 'friendships' && e.list === 'followers'));
+    if (mode === 'local') {
+      const sumiu = s.rows.find((x) => x.id === '9502');
+      check(scn, 'perfil 404 registrado como indisponível, sem e-mail, e a fila conclui', sumiu && sumiu.detailLoaded && sumiu.status === 'profile_unavailable' && !sumiu.email && s.isComplete, sumiu);
+      check(scn, 'perfil 404 consultado 1 vez', infoReqs(log).filter((e) => e.pk === '9502').length === 1);
+    }
+    if (mode === 'lista_inexistente') {
+      check(scn, 'nome inexistente não gera /users//info/ com id vazio', !log.some((e) => /\/users\/\/info/.test(e.url || '')), log.filter((e) => e.kind === 'instagram-other').map((e) => e.url));
+      check(scn, 'nome inexistente consultado 1 vez', profileReqs(log).filter((e) => e.username === 'nome_sumiu').length === 1);
+    }
+    if (mode === 'lista') {
+      const web = profileReqs(log).map((e) => e.username);
+      check(scn, 'lista lida do storage e enviada ao histórico', r.state && r.state.customUserList === 'lista_loja,lista_pessoa', r.state && r.state.customUserList);
+      check(scn, 'chave temporária da lista removida do storage', !(r.key in r.storageAfter));
+      check(scn, 'nome -> id resolvido 1 vez por perfil', web.join() === 'lista_loja,lista_pessoa', web);
+    }
+  }
+  if (/retomada_comment/.test(scn)) {
+    const reqs2 = profileReqs(log).map((e) => e.username).slice(r.reqs1.length);
+    check(scn, 'sessão 1: 1 perfil consultado, 429 no 2º, pausa', r.reqs1.join() === 'ret_um,ret_dois' && r.s1.isPaused, r.reqs1);
+    check(scn, 'histórico da sessão 1 conta só o perfil consultado (1), não os 3 listados', r.historyS1.scrapedCount === 1 && !r.historyS1.isFromComplete, { scrapedCount: r.historyS1.scrapedCount, done: r.historyS1.isFromComplete });
+    check(scn, 'Iniciar habilitado depois da pausa', r.startClicked === true);
+    check(scn, 'sessão 2 consulta só os pendentes (sem repetir ret_um)', reqs2.join() === 'ret_dois,ret_tres', reqs2);
+    check(scn, 'retomada conclui a tarefa', s.isComplete === true, { isComplete: s.isComplete, paused: s.isPaused });
+    const names = r.stored.map((x) => x.userName).sort();
+    check(scn, 'histórico local com os 3 perfis, sem duplicar', JSON.stringify(names) === JSON.stringify(['ret_dois', 'ret_tres', 'ret_um']) && r.stored.every((x) => x.detailLoaded), names);
+    check(scn, 'e-mails dos 3 perfis preservados no histórico', r.stored.filter((x) => x.email).length === 3, r.stored.map((x) => x.email));
+  }
+  if (/dj_filtro/.test(scn)) {
+    check(scn, 'tarefa conclui com o filtro DJ ligado', s.isComplete === true);
+    check(scn, 'filtro só afeta a visão (1 lead na tabela, 3 processados)', r.view.userList.join() === 'dj_set_oficial' && r.view.processed === 3, r.view);
+    const rows = Object.entries(r.storageAfter).filter(([k]) => /^extract_list_/.test(k)).map(([, v]) => v)[0] || [];
+    check(scn, 'histórico local guarda os 3 perfis', rows.length === 3, rows.map((x) => x.userName));
+    const last = r.state && r.state.lastHistory;
+    check(scn, 'histórico no servidor: 3 extraídos, 3 e-mails, concluído', last && last.scrapedCount === 3 && last.count === 3 && last.isFromComplete === true, last && { scrapedCount: last.scrapedCount, count: last.count, done: last.isFromComplete });
   }
   if (/export_vazio/.test(scn)) {
     check(scn, 'linhas carregadas sem nenhuma consulta de perfil concluída', s.rows.length === 2 && s.rows.every((x) => !x.detailLoaded), s.rows.map((x) => x.detailLoaded));

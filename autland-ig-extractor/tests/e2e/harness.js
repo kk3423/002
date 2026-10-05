@@ -21,7 +21,7 @@ function findVmSource() {
   })()`;
 }
 
-function parseResult(name, state) {
+function parseResult(name, state, params, scenario) {
   switch (name) {
     case 'getConfigs':
       return {
@@ -33,15 +33,44 @@ function parseResult(name, state) {
           dataKeys: 'data.comments|data.next_cursor|data.has_more|data.comment_count',
           itemsDataKeys: 'user.pk|user.username|user.profile_pic_url',
         },
+        // Test-only list endpoints (served by the harness) for the other modes.
+        apiUserForLike: {
+          url: 'https://www.instagram.com/__test__/likers/${postId}/?cursor=${cursor}',
+          noExistCheckKey: 'data.status', noExistCheckValue: 'ok', checkKey: 'data.status', checkValue: 'ok',
+          dataKeys: 'data.users|data.next_cursor|data.has_more|data.user_count',
+          itemsDataKeys: 'pk|username|full_name|profile_pic_url',
+        },
+        apiUserForHashTag: {
+          url: 'https://www.instagram.com/__test__/tag/${tagName}/?cursor=${cursor}',
+          noExistCheckKey: 'data.status', noExistCheckValue: 'ok', checkKey: 'data.status', checkValue: 'ok',
+          dataKeys: 'data.items|data.next_cursor|data.has_more|data.pic|data.name|data.count',
+          itemsDataKeys: 'user.pk|user.username',
+        },
+        apiUserForLocation: {
+          url: 'https://www.instagram.com/__test__/loc/${locationId}/?cursor=${cursor}',
+          noExistCheckKey: 'data.status', noExistCheckValue: 'ok', checkKey: 'data.status', checkValue: 'ok',
+          dataKeys: 'data.items|data.next_cursor|data.has_more|data.name|data.count',
+          itemsDataKeys: 'user.pk|user.username',
+        },
       };
     case 'u': return { isPro: true };
     case 'getUseCount': return 0;
-    case 'getHistoryItem': return null;
+    case 'getHistoryItem':
+      // Resume test: hand back the history as the server stored it from the last updates.
+      if (scenario && scenario.resumeHistory && state.lastHistory) {
+        const h = state.lastHistory;
+        return { __type: 'Object', className: 'History', objectId: 'histTest', token: 'tok', updateTimes: state.historyUpdates,
+          scrapedCount: h.scrapedCount || 0, cursorScrapedCount: h.cursorScrapedCount || 0, count: h.count || 0,
+          lastCursor: h.lastCursor || '', customUserList: state.customUserList || '' };
+      }
+      return null;
     case 'addHistoryItem':
     case 'updateHistory':
       state.historyUpdates++;
+      if (name === 'addHistoryItem' && params && typeof params.customUserList === 'string') state.customUserList = params.customUserList;
+      if (name === 'updateHistory' && params) { state.lastHistory = Object.assign({}, state.lastHistory || {}, params); (state.historyLog = state.historyLog || []).push(params); }
       return { __type: 'Object', className: 'History', objectId: 'histTest', token: 'tok',
-        updateTimes: state.historyUpdates, scrapedCount: 0, cursorScrapedCount: 0, count: 0, customUserList: '' };
+        updateTimes: state.historyUpdates, scrapedCount: 0, cursorScrapedCount: 0, count: 0, customUserList: state.customUserList || '' };
     default: return null;
   }
 }
@@ -97,8 +126,19 @@ async function install(ctx, scenario, log) {
     const u = new URL(url);
     if (u.host === 'igemailextractor.echobot.dev' && u.pathname.startsWith('/parse/functions/')) {
       const name = u.pathname.split('/').pop();
+      let params = null;
+      try { params = JSON.parse(req.postData() || '{}'); } catch (e) { params = null; }
       log.push({ t, kind: 'parse', name });
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ result: parseResult(name, state) }) });
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ result: parseResult(name, state, params, scenario) }) });
+    }
+    const testList = u.host === 'www.instagram.com' && u.pathname.match(/^\/__test__\/(likers|tag|loc)\//);
+    if (testList) {
+      log.push({ t, kind: 'list', list: testList[1], url });
+      const users = scenario.listUsers || [];
+      const body = testList[1] === 'likers'
+        ? { status: 'ok', users: users.map((x) => ({ pk: String(x.pk), username: x.username, full_name: 'Nome ' + x.username, profile_pic_url: PIXEL })), next_cursor: '', has_more: false, user_count: users.length }
+        : { status: 'ok', items: users.map((x) => ({ user: { pk: String(x.pk), username: x.username } })), next_cursor: '', has_more: false, pic: PIXEL, name: 'teste', count: users.length };
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
     }
     if (u.host === 'www.instagram.com' && u.pathname.startsWith('/__test__/comments/')) {
       log.push({ t, kind: 'comments', url });
@@ -117,8 +157,24 @@ async function install(ctx, scenario, log) {
       return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': res.contentType || 'application/json' }, res.headers || {}), body });
     }
     if (u.host.endsWith('instagram.com') && /\/api\/v1\/users\/\d+\/info\/?$/.test(u.pathname)) {
-      log.push({ t, kind: 'FORBIDDEN_users_info', url });
-      return route.fulfill({ status: 500, body: '{}' });
+      // Allowed only in the non-Comment modes, where the extension has always used it.
+      if (!scenario.info) {
+        log.push({ t, kind: 'FORBIDDEN_users_info', url });
+        return route.fulfill({ status: 500, body: '{}' });
+      }
+      const pk = u.pathname.split('/')[4];
+      const n = (state.profileCalls['info:' + pk] = (state.profileCalls['info:' + pk] || 0) + 1);
+      log.push({ t, kind: 'info', pk, n, headers: req.headers() });
+      const res = scenario.info[pk] ? scenario.info[pk](n, req) : { status: 404, body: { status: 'fail', message: 'User not found' } };
+      const body = typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
+      return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': 'application/json' }, res.headers || {}), body });
+    }
+    const friendship = u.host.endsWith('instagram.com') && u.pathname.match(/^\/api\/v1\/friendships\/(\d+)\/(followers|following)\/?$/);
+    if (friendship && scenario.friendships) {
+      const kind = friendship[2], n = (state.profileCalls['list:' + kind] = (state.profileCalls['list:' + kind] || 0) + 1);
+      log.push({ t, kind: 'friendships', list: kind, target: friendship[1], n, maxId: u.searchParams.get('max_id') });
+      const res = scenario.friendships(kind, n, u);
+      return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': 'application/json' }, res.headers || {}), body: JSON.stringify(res.body) });
     }
     if (/(^|\.)autland\.com$/.test(u.host) && req.resourceType() === 'image') {
       log.push({ t, kind: 'ui-image', url });
@@ -146,7 +202,7 @@ async function snapshot(page) {
       retryAfterUntil: vm.retryAfterUntil, commercialStartRequired: vm.commercialStartRequired,
       commercialContactUnavailable: vm.commercialContactUnavailable,
       detailCycle: !!vm.detailCycle, loadUserIndex: vm.loadUserIndex,
-      rows: vm.followList.map(r => ({ user: r.userName, email: r.email, status: r.emailStatus, text: P.emailStatusText(r),
+      rows: vm.followList.map(r => ({ user: r.userName, id: r.userId, email: r.email, status: r.emailStatus, text: P.emailStatusText(r),
         detailLoaded: r.detailLoaded, failure: r.contactFailure || null, profileType: r.contactProfileType || null,
         followers: r.followers, bio: r.bio, fullName: r.fullName })),
       emailList: vm.emailList.map(r => r.email),

@@ -1,0 +1,1356 @@
+diff -ruN PATCHED-14/LEIA-ME.txt PATCHED-15/LEIA-ME.txt
+--- PATCHED-14/LEIA-ME.txt	2026-10-05 03:04:00.547310039 +0000
++++ PATCHED-15/LEIA-ME.txt	2026-10-05 09:47:40.000000000 +0000
+@@ -1,74 +1,81 @@
+-Autland IG Extractor — PATCHED 14 — Contato comercial com diagnóstico
++Autland IG Extractor — PATCHED 15 — Contato comercial com diagnóstico
+ 
+ SITUAÇÃO (leia antes de instalar)
+-A coleta do e-mail do botão Contato → E-mail AINDA NÃO ESTÁ COMPROVADA.
+-Nenhuma consulta ao Instagram foi feita na preparação desta versão: o ambiente
+-onde ela foi construída não tem acesso ao instagram.com nem à sua sessão.
+-Todos os testes usaram respostas simuladas.
++- Modos Seguidores, Seguindo, Hashtag, Curtidas, Local e Lista: corrigidos e
++  testados de ponta a ponta com respostas simuladas.
++- Modo Comment: a coleta do e-mail do botão Contato → E-mail AINDA NÃO ESTÁ
++  COMPROVADA. Nenhuma consulta ao Instagram foi possível na preparação desta
++  versão: o ambiente onde ela foi construída não tem acesso ao instagram.com
++  nem à sua sessão. Todos os testes usaram respostas simuladas.
+ 
+-O QUE A PESQUISA EM RESPOSTAS REAIS DE TERCEIROS MOSTROU
++POR QUE O MODO COMMENT CONTINUA SEM PROVA
+ Foram examinadas cerca de 75 respostas reais do Instagram publicadas por
+-terceiros (capturas em repositórios públicos), sem contato com a Meta:
++terceiros, sem contato com a Meta:
++1. A consulta web (web_profile_info) devolve business_email NULO em todas as
++   capturas de 2022 em diante, inclusive em perfis comerciais com botão de
++   contato.
++2. Nas capturas atuais, o e-mail público só aparece em public_email da API
++   móvel (/users/{id}/info/), que continua fora do modo Comment, como você
++   pediu.
++3. Relatos de setembro de 2026 descrevem HTTP 429 já na primeira consulta
++   web_profile_info em sessões logadas, como no seu teste da versão 13.
++Conclusão: é provável que essa rota não entregue o e-mail. A extensão prova o
++caso no primeiro uso real, gastando poucas consultas, e explica o resultado.
++
++O QUE MUDOU NA VERSÃO 15 (todos os modos)
++- Retomar uma extração do modo Comment não pula mais comentaristas. Antes, a
++  retomada depois de um 429 pulava quem foi listado mas nunca consultado (na
++  simulação, 98 de 150; todos, quando o 429 vinha na 1ª consulta).
++- O histórico guarda um registro por perfil, sem duplicar, e só conta perfis
++  consultados de verdade.
++- Históricos antigos com e-mail tirado da bio são limpos ao retomar. A
++  exportação pelo Histórico do popup segue a mesma regra e ganhou as colunas
++  "E-mail comercial" e "Status do e-mail".
++- Filtro DJ: agora só filtra a tabela e a exportação. Antes, com o filtro
++  ligado, a extração nunca concluía e perfis sumiam do Histórico.
++- Perfil apagado (HTTP 404) nos outros modos: vira "Perfil indisponível" e a
++  fila segue. Antes, a extração travava sem concluir. Três seguidos pausam a
++  fila para você conferir a sessão.
++- Erro passageiro: 1 nova tentativa por perfil; se persistir, a linha mostra a
++  falha e a extração conclui.
++- Perfil renomeado entre a lista e o detalhe mantém o e-mail comercial.
++- Lista de @perfis: nome inexistente vira "Perfil indisponível", sem consulta
++  inválida.
++- A aba de sessão do instagram.com abre no máximo 1 vez a cada 100 perfis.
++  Antes, no modo Comment com 100, 200... comentaristas, abria a cada perfil.
++- Pausa 429 salva por outro dashboard: os outros modos continuam sozinhos no
++  fim da pausa. O modo Comment continua esperando você clicar em Iniciar.
++- Dois dashboards abertos não apagam mais o histórico um do outro.
+ 
+-1. A consulta web (web_profile_info / ?__a=1 / graphql) devolve o campo
+-   business_email NULO em todas as capturas de 2022 em diante — inclusive em
+-   sessões logadas e em perfis comerciais cujo app mostra botão de contato
+-   (business_contact_method CALL/TEXT e contatos marcados como visíveis).
+-   Capturas de 2019 e 2021 ainda traziam o e-mail; as atuais, não.
+-2. O e-mail público aparece, nas capturas atuais, apenas no campo public_email
+-   da API móvel (/users/{id}/info/), que você vetou para o modo Comment.
+-3. should_show_public_contacts é o interruptor "Exibir no perfil" do dono da
+-   conta, não um sinal de permissão do visitante. Pode vir ausente.
+-4. Relatos públicos de setembro de 2026 indicam que o Instagram passou a
+-   recusar a própria web_profile_info em sessões logadas (HTTP 429 já na
+-   primeira consulta, ou 400 feedback_required). Isso bate com o 429 que você
+-   recebeu no teste da versão 13.
+-
+-Conclusão honesta: é provável que esta rota não entregue o e-mail do botão
+-Contato. A versão 14 não "conserta" isso — ela detecta e prova o caso em uma
+-única consulta, em vez de gastar dezenas sem retorno.
+-
+-O QUE MUDOU
++O QUE CONTINUA DA VERSÃO 14 (modo Comment)
+ - Status por perfil, separado de falha de acesso:
+     Contato público do Instagram ........ e-mail do campo comercial público
+-    E-mail não entregue pela consulta web  perfil anuncia contato (ligar/
+-                                           mensagem), mas e-mail e telefone
+-                                           vieram nulos
++    E-mail não entregue pela consulta web  perfil anuncia contato, mas e-mail
++                                           e telefone vieram nulos
+     Campo comercial vazio ............... campo veio, sem e-mail
+-    Contato oculto pelo perfil .......... o perfil sinaliza contatos ocultos
++    Contato oculto pelo perfil .......... o perfil esconde os contatos
+     Campo omitido pela consulta ......... a resposta não trouxe o campo
+     Conta pessoal ....................... não existe botão Contato
+     Perfil indisponível / divergente .... apagado, renomeado ou outro perfil
+-- Falhas de acesso (429, 403, redirecionamento para login, página HTML, rede)
+-  aparecem na linha como falha, nunca como "sem e-mail", e param a fila sem
+-  nova tentativa automática — inclusive na leitura dos comentários.
+-- A fila só é encerrada por diagnóstico quando a evidência é do campo:
+-  3 perfis profissionais sem o campo, ou 3 perfis comerciais com contato
+-  retido (botão ativo, e-mail e telefone nulos) e nenhum e-mail entregue.
+-  Contas pessoais e perfis ocultos não contam. A decisão fica salva e pode ser
+-  reavaliada com a verificação de 1 perfil.
+-- Recusas repetidas (429/400) NÃO encerram a rota: valem a pausa e o recomeço
+-  manual. Elas aparecem como aviso e no diagnóstico.
+-- Textos vindos do Instagram são exibidos como texto puro, nunca como HTML.
+-- Diagnóstico automático: cada resposta real fica registrada de forma resumida
+-  (HTTP, Retry-After, nomes dos campos recebidos, tipo de perfil, e-mail
+-  mascarado). Ele vai junto em TODA exportação XLSX do modo Comment, em duas
+-  abas: "Diagnostico contato" (uma linha por perfil) e "Respostas reais".
+-  Não é preciso copiar nada à mão.
+-- "Verificar 1 perfil": faz UMA consulta, pela mesma fila, intervalo, pausa e
+-  limites, para um @perfil que você vê com Contato → E-mail no app.
++- Falhas de acesso (429, 403, login, página HTML, rede) aparecem na linha como
++  falha, nunca como "sem e-mail", e param a fila sem nova tentativa.
++- A fila só é encerrada pelo diagnóstico com evidência do campo: 3 perfis
++  profissionais sem o campo, ou 3 perfis comerciais com contato retido e
++  nenhum e-mail entregue. Contas pessoais e perfis ocultos não contam.
++- Diagnóstico automático em toda exportação XLSX do modo Comment, em duas
++  abas: "Diagnostico contato" e "Respostas reais".
++- "Verificar 1 perfil": UMA consulta, pela mesma fila e limites, para um
++  @perfil que você vê com Contato → E-mail no app.
+ 
+ PRESERVADO
+-- HTTP 429: pausa compartilhada e persistente pelo Retry-After (60 minutos
+-  quando não informado), nunca encurtada por outra aba. Sem reinício
+-  automático; Iniciar confere a pausa salva antes de qualquer consulta.
+-- 1 consulta por vez entre dashboards, intervalo mínimo de 10 s, cache local
+-  compartilhado entre a fila e a verificação manual.
++- HTTP 429: pausa compartilhada e salva, pelo Retry-After (60 minutos quando
++  não informado), nunca encurtada por outra aba. No modo Comment, sem
++  reinício automático: Iniciar confere a pausa salva antes de qualquer
++  consulta.
++- 1 consulta por vez entre dashboards, intervalo mínimo de 10 s.
+ - /users/{id}/info/ continua fora do modo Comment. Sem troca de User-Agent,
+   autenticação, host, proxy ou API móvel.
+-- E-mail da bio, sites e links NUNCA preenchem a coluna de e-mail.
+-- Comentários, histórico, tabela e exportações (XLSX/CSV com "Status do
+-  e-mail"). Os outros modos não foram alterados.
++- E-mail da bio, de sites e de links NUNCA preenche a coluna de e-mail.
+ 
+ INSTALAÇÃO (é tudo o que você precisa fazer)
+ 1. Feche os dashboards abertos e extraia o ZIP inteiro.
+@@ -76,17 +83,17 @@
+    substituindo os correspondentes.
+ 3. Em chrome://extensions, clique em Recarregar na Autland IG Extractor.
+    Não remova a extensão: isso apagaria o histórico e a pausa salva.
+-4. Abra uma extração NOVA no modo Comment. O cabeçalho deve mostrar
+-   "PATCHED 14 · Contato comercial com diagnóstico".
+-5. Clique em Iniciar. Nada é consultado antes disso.
++4. Abra uma extração. O cabeçalho deve mostrar
++   "PATCHED 15 · Contato comercial com diagnóstico".
++5. No modo Comment, clique em Iniciar. Nada é consultado antes disso.
+ 
+-O QUE VOCÊ VAI VER, E O QUE SIGNIFICA
++O QUE VOCÊ VAI VER NO MODO COMMENT, E O QUE SIGNIFICA
+ - "Contato público do Instagram" com e-mail na tabela: a rota funciona. O
+   painel passa a mostrar a prova real (perfil, data e e-mail mascarado).
+ - "E-mail não entregue pela consulta web" repetido: a rota devolve o perfil,
+-  o perfil anuncia contato, mas o e-mail e o telefone vêm nulos. Depois de 3 perfis comerciais assim, a fila encerra
+-  sozinha e explica o motivo. É o cenário que a pesquisa indica como provável.
++  mas e-mail e telefone vêm nulos. Depois de 3 perfis comerciais assim, a fila
++  encerra sozinha e explica o motivo. É o cenário mais provável.
+ - HTTP 429 ou 400 logo na primeira consulta: a pausa é respeitada e nada é
+   repetido. Depois do horário mostrado, pode tentar de novo.
+-- Em qualquer caso, exporte o XLSX: as duas abas de diagnóstico já trazem tudo
+-  o que é preciso para decidir o próximo passo.
++- Em qualquer caso, exporte o XLSX: as duas abas de diagnóstico trazem tudo o
++  que é preciso para decidir o próximo passo.
+diff -ruN PATCHED-14/PATCH_NOTES.txt PATCHED-15/PATCH_NOTES.txt
+--- PATCHED-14/PATCH_NOTES.txt	2026-10-05 03:04:04.290546953 +0000
++++ PATCHED-15/PATCH_NOTES.txt	2026-10-05 10:05:46.000000000 +0000
+@@ -1,3 +1,56 @@
++PATCHED 15 — 05/10/2026
++Stability release for every mode. The Comment-mode route and its limits are
++unchanged from PATCHED 14: one ordinary web_profile_info request per profile,
++serial, 10 s minimum spacing, shared persistent 429 cooldown (Retry-After,
++60 min default), no automatic retry, no /users/{id}/info/ in Comment mode.
++A public commercial email delivered by that route is still NOT confirmed by a
++real response: no request to Instagram was possible while building it.
++
++Fixes
++- Comment resume: the history counted listed commenters as extracted, so a
++  resume after a 429 skipped commenters never checked (98 of 150 in the
++  simulation; all of them when the 429 came on the first check). Counts now
++  use checked profiles only, the end of the comment list no longer marks the
++  history as complete, and a resume skips exactly the profiles already
++  stored. Counters saved by older versions are not trusted for Comment mode.
++- History rows: one row per profile (no duplicates after a resume). Rows saved
++  by older versions are cleaned on resume, so a bio/site email never fills the
++  email column again. The popup History export applies the same rule, uses
++  the "E-mail comercial" header plus the "Status do e-mail" column, and its
++  email count matches what it exports.
++- DJ filter: it filters the table and the export only. It no longer decides
++  which rows are saved, when a run completes or the history counters (with
++  the filter on, a run never completed and hidden rows vanished from History).
++- Other modes, deleted profile: a 404 on the profile detail is recorded as
++  "Perfil indisponível" and the queue moves on. Before, it was retried, opened
++  an instagram.com tab and the run never completed. Three in a row pause the
++  run for a session check, without automatic retry.
++- Other modes, errors: a failing profile is retried once, then recorded as a
++  failure in the status column so the run can complete. The retry counter now
++  resets after every answered profile (two errors anywhere in a run used to
++  disable every later retry). A login/HTML page keeps that profile as the next
++  one to try.
++- Other modes, renamed profile: the detail is matched by id, so a profile
++  renamed between the list and its detail keeps its commercial email.
++- User list: a name with no profile is recorded as unavailable and never
++  produces a /users//info/ request with an empty id; network errors stay
++  retryable on resume; an empty or already finished list completes.
++- Background instagram.com "claim" tab: once per 100 processed profiles. In
++  Comment mode with 100, 200, ... commenters it opened on every profile.
++- Saved 429 pause: the other modes resume by themselves when a pause saved by
++  another dashboard ends (Comment mode still waits for Iniciar).
++- History index: saves from two open dashboards no longer overwrite each
++  other's entries and dates (the 190-day cleanup could delete a history that
++  had just been used).
++- Instagram's own error text is stripped of markup in every notification.
++
++Validation: 41 parser/reader unit tests; 12 data/history tests that run the
++real dashboard and popup code in Node (10 of them fail on PATCHED 14, which
++reproduces the defects above); end-to-end runs of the real dashboard in
++Chromium for every mode. Every Instagram response in these tests is simulated.
++
++==============================================================================
++
+ PATCHED 14 — 04/10/2026
+ Comment detail enrichment keeps one ordinary web_profile_info request per
+ profile. A live public commercial email is still NOT confirmed: no request to
+diff -ruN PATCHED-14/dashboard.js PATCHED-15/dashboard.js
+--- PATCHED-14/dashboard.js	2026-10-05 03:21:38.329191090 +0000
++++ PATCHED-15/dashboard.js	2026-10-05 09:45:58.000000000 +0000
+@@ -399,7 +399,7 @@
+                                                   staticClass:
+                                                     "has-text-primary has-text-weight-semibold mx-1",
+                                                 },
+-                                                [t._v(t._s(t.userList.length))]
++                                                [t._v(t._s(t.processedList.length))]
+                                               ),
+                                               t._v(
+                                                 " users have been extracted"
+@@ -419,7 +419,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -462,7 +462,7 @@
+                                                       [
+                                                         t._v(
+                                                           t._s(
+-                                                            t.userList.length
++                                                            t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -485,7 +485,7 @@
+                                                               t._v(
+                                                                 t._s(
+                                                                   t.lastScrapedCount +
+-                                                                    t.userList
++                                                                    t.processedList
+                                                                       .length
+                                                                 )
+                                                               ),
+@@ -509,7 +509,7 @@
+                                                       [
+                                                         t._v(
+                                                           t._s(
+-                                                            t.userList.length +
++                                                            t.processedList.length +
+                                                               1
+                                                           )
+                                                         ),
+@@ -531,7 +531,7 @@
+                                                               t._v(
+                                                                 t._s(
+                                                                   t.lastScrapedCount +
+-                                                                    t.userList
++                                                                    t.processedList
+                                                                       .length
+                                                                 )
+                                                               ),
+@@ -688,7 +688,7 @@
+                                             staticClass:
+                                               "has-text-primary has-text-weight-semibold mx-1",
+                                           },
+-                                          [t._v(t._s(t.userList.length))]
++                                          [t._v(t._s(t.processedList.length))]
+                                         ),
+                                         t._v(" users have been extracted"),
+                                         t.lastScrapedCount > 0
+@@ -706,7 +706,7 @@
+                                                   t._v(
+                                                     t._s(
+                                                       t.lastScrapedCount +
+-                                                        t.userList.length
++                                                        t.processedList.length
+                                                     )
+                                                   ),
+                                                 ]
+@@ -746,7 +746,7 @@
+                                                   staticClass:
+                                                     "has-text-primary has-text-weight-semibold mx-1",
+                                                 },
+-                                                [t._v(t._s(t.userList.length))]
++                                                [t._v(t._s(t.processedList.length))]
+                                               ),
+                                               t._v(
+                                                 " users have been extracted"
+@@ -766,7 +766,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -786,7 +786,7 @@
+                                                 },
+                                                 [
+                                                   t._v(
+-                                                    t._s(t.userList.length + 1)
++                                                    t._s(t.processedList.length + 1)
+                                                   ),
+                                                 ]
+                                               ),
+@@ -806,7 +806,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -946,7 +946,7 @@
+                                             staticClass:
+                                               "has-text-primary has-text-weight-semibold mx-1",
+                                           },
+-                                          [t._v(t._s(t.userList.length))]
++                                          [t._v(t._s(t.processedList.length))]
+                                         ),
+                                         t._v(" users have been extracted"),
+                                         t.lastScrapedCount > 0
+@@ -964,7 +964,7 @@
+                                                   t._v(
+                                                     t._s(
+                                                       t.lastScrapedCount +
+-                                                        t.userList.length
++                                                        t.processedList.length
+                                                     )
+                                                   ),
+                                                 ]
+@@ -1004,7 +1004,7 @@
+                                                   staticClass:
+                                                     "has-text-primary has-text-weight-semibold mx-1",
+                                                 },
+-                                                [t._v(t._s(t.userList.length))]
++                                                [t._v(t._s(t.processedList.length))]
+                                               ),
+                                               t._v(
+                                                 " users have been extracted"
+@@ -1024,7 +1024,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1044,7 +1044,7 @@
+                                                 },
+                                                 [
+                                                   t._v(
+-                                                    t._s(t.userList.length + 1)
++                                                    t._s(t.processedList.length + 1)
+                                                   ),
+                                                 ]
+                                               ),
+@@ -1064,7 +1064,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1208,7 +1208,7 @@
+                                             staticClass:
+                                               "has-text-primary has-text-weight-semibold mx-1",
+                                           },
+-                                          [t._v(t._s(t.userList.length))]
++                                          [t._v(t._s(t.processedList.length))]
+                                         ),
+                                         t._v(" perfis encontrados"),
+                                         t.lastScrapedCount > 0
+@@ -1226,7 +1226,7 @@
+                                                   t._v(
+                                                     t._s(
+                                                       t.lastScrapedCount +
+-                                                        t.userList.length
++                                                        t.processedList.length
+                                                     )
+                                                   ),
+                                                 ]
+@@ -1266,7 +1266,7 @@
+                                                   staticClass:
+                                                     "has-text-primary has-text-weight-semibold mx-1",
+                                                 },
+-                                                [t._v(t._s(t.userList.length))]
++                                                [t._v(t._s(t.processedList.length))]
+                                               ),
+                                               t._v(
+                                                 " perfis encontrados"
+@@ -1286,7 +1286,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1326,7 +1326,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1465,7 +1465,7 @@
+                                             staticClass:
+                                               "has-text-primary has-text-weight-semibold mx-1",
+                                           },
+-                                          [t._v(t._s(t.userList.length))]
++                                          [t._v(t._s(t.processedList.length))]
+                                         ),
+                                         t._v(" users have been extracted"),
+                                         t.lastScrapedCount > 0
+@@ -1483,7 +1483,7 @@
+                                                   t._v(
+                                                     t._s(
+                                                       t.lastScrapedCount +
+-                                                        t.userList.length
++                                                        t.processedList.length
+                                                     )
+                                                   ),
+                                                 ]
+@@ -1523,7 +1523,7 @@
+                                                   staticClass:
+                                                     "has-text-primary has-text-weight-semibold mx-1",
+                                                 },
+-                                                [t._v(t._s(t.userList.length))]
++                                                [t._v(t._s(t.processedList.length))]
+                                               ),
+                                               t._v(
+                                                 " users have been extracted"
+@@ -1543,7 +1543,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1563,7 +1563,7 @@
+                                                 },
+                                                 [
+                                                   t._v(
+-                                                    t._s(t.userList.length + 1)
++                                                    t._s(t.processedList.length + 1)
+                                                   ),
+                                                 ]
+                                               ),
+@@ -1583,7 +1583,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1722,7 +1722,7 @@
+                                             staticClass:
+                                               "has-text-primary has-text-weight-semibold mx-1",
+                                           },
+-                                          [t._v(t._s(t.userList.length))]
++                                          [t._v(t._s(t.processedList.length))]
+                                         ),
+                                         t._v(" users have been extracted"),
+                                         t.lastScrapedCount > 0
+@@ -1740,7 +1740,7 @@
+                                                   t._v(
+                                                     t._s(
+                                                       t.lastScrapedCount +
+-                                                        t.userList.length
++                                                        t.processedList.length
+                                                     )
+                                                   ),
+                                                 ]
+@@ -1780,7 +1780,7 @@
+                                                   staticClass:
+                                                     "has-text-primary has-text-weight-semibold mx-1",
+                                                 },
+-                                                [t._v(t._s(t.userList.length))]
++                                                [t._v(t._s(t.processedList.length))]
+                                               ),
+                                               t._v(
+                                                 " users have been extracted"
+@@ -1800,7 +1800,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -1820,7 +1820,7 @@
+                                                 },
+                                                 [
+                                                   t._v(
+-                                                    t._s(t.userList.length + 1)
++                                                    t._s(t.processedList.length + 1)
+                                                   ),
+                                                 ]
+                                               ),
+@@ -1840,7 +1840,7 @@
+                                                         t._v(
+                                                           t._s(
+                                                             t.lastScrapedCount +
+-                                                              t.userList.length
++                                                              t.processedList.length
+                                                           )
+                                                         ),
+                                                       ]
+@@ -3205,6 +3205,14 @@
+               return true;
+             }).map(window.IGPublicContacts.commercialRow);
+           },
++          processedList: function () {
++            // What was really extracted, regardless of the DJ display filter. Comment rows are
++            // listed before their profile check, so in Comment mode only checked rows count.
++            var comment = 4 === this.type;
++            return this.followList.filter(function (t) {
++              return comment ? !!t.detailLoaded : !!t.loaded;
++            });
++          },
+           notExistList: function () {
+             return this.followList.filter(function (t) {
+               return !t.userId && t.loaded;
+@@ -3262,7 +3270,7 @@
+         created: function () {
+           var t = d.a.runtime.getManifest(),
+             e = t.version;
+-          (this.version = "v".concat(e) + " · PATCHED 14 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
++          (this.version = "v".concat(e) + " · PATCHED 15 · Contato comercial com diagnóstico"), this.startAfterSavedCooldown();
+           var self = this;
+           // The panel's cooldown gates need a clock of their own: the DJ bar's
+           // ticker can be absent and must not decide when Iniciar re-enables.
+@@ -3330,9 +3338,12 @@
+                 self.pauseExtraction();
+                 self.$buefy.notification.open({
+                   indefinite: !0,
+-                  message: "Instagram request cooldown is active until " + new Date(until).toLocaleString() + ". Your collected rows are kept in History. Wait before continuing.",
++                  message: "Instagram request cooldown is active until " + new Date(until).toLocaleString() + ". Your collected rows are kept in History. " +
++                    (commentMode ? "Wait before continuing." : "Extraction resumes by itself after that time."),
+                   position: "is-bottom-right", type: "is-warning", hasIcon: !0
+                 });
++                // Other modes keep their usual behaviour: continue on their own once the shared pause ends.
++                if (!commentMode) self.autoContinue();
+                 return;
+               }
+               // Testing this changed route requires the user's Start click.
+@@ -3935,7 +3946,8 @@
+                                             (t.skipCount = 0))
+                                           : ((t.skipCount =
+                                               t.skipCount - u.length),
+-                                            (u = [])));
++                                            (u = []))),
++                                      (u = t.dropResumedRows(u, s.itemsDataKeys.split("|")[0]));
+                                     var p = s.itemsDataKeys.split("|");
+                                     (u = u.map(function (e, s) {
+                                       for (
+@@ -4013,9 +4025,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram requires you to do a simple account verification. Please complete it and come back and click the "Continue" button to start scraping. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#7] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4031,9 +4041,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram returned a real HTTP 429 rate-limit. This build now pauses requests and honors Retry-After; if Instagram does not provide one, it enforces a 60-minute cooldown. Do not repeatedly click Continue during the cooldown. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#8] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4238,6 +4246,7 @@
+                                           : ((t.skipCount =
+                                               t.skipCount - p.length),
+                                             (p = []))),
++                                      (p = t.dropResumedRows(p, g[0])),
+                                       (p = p.map(function (e, s) {
+                                         for (
+                                           var a = [], i = 0;
+@@ -4314,9 +4323,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram requires you to do a simple account verification. Please complete it and come back and click the "Continue" button to start scraping. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#12] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4332,9 +4339,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram returned a real HTTP 429 rate-limit. This build now pauses requests and honors Retry-After; if Instagram does not provide one, it enforces a 60-minute cooldown. Do not repeatedly click Continue during the cooldown. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#13] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4533,6 +4538,7 @@
+                                           : ((t.skipCount =
+                                               t.skipCount - p.length),
+                                             (p = []))),
++                                      (p = t.dropResumedRows(p, g[0])),
+                                       (p = p.map(function (e, s) {
+                                         for (
+                                           var a = [], i = 0;
+@@ -4577,7 +4583,7 @@
+                                       p.length > 0 &&
+                                         (t.followList = t.followList.concat(p)),
+                                       !t.pageInfo.has_next_page &&
+-                                        (t.updateHistory({ isFromComplete: !0 }),
++                                        (t.updateHistory(0 === t.followList.length ? { isFromComplete: !0 } : {}),
+                                         (document.body.scrollTop = 0),
+                                         (document.documentElement.scrollTop = 0),
+                                         (t.isLoading = !1),
+@@ -4620,9 +4626,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram requires you to do a simple account verification. Please complete it and come back and click the "Continue" button to start scraping. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#16] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4638,9 +4642,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram returned a real HTTP 429 rate-limit. This build now pauses requests and honors Retry-After; if Instagram does not provide one, it enforces a 60-minute cooldown. Do not repeatedly click Continue during the cooldown. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#17] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4854,6 +4856,7 @@
+                                           : ((t.skipCount =
+                                               t.skipCount - p.length),
+                                             (p = []))),
++                                      (p = t.dropResumedRows(p, g[0])),
+                                       (p = p.map(function (e, s) {
+                                         for (
+                                           var a = [], i = 0;
+@@ -4930,9 +4933,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram requires you to do a simple account verification. Please complete it and come back and click the "Continue" button to start scraping. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#21] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -4948,9 +4949,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram returned a real HTTP 429 rate-limit. This build now pauses requests and honors Retry-After; if Instagram does not provide one, it enforces a 60-minute cooldown. Do not repeatedly click Continue during the cooldown. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#22] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -5149,6 +5148,7 @@
+                                           : ((t.skipCount =
+                                               t.skipCount - p.length),
+                                             (p = []))),
++                                      (p = t.dropResumedRows(p, g[0])),
+                                       (p = p.map(function (e, s) {
+                                         for (
+                                           var a = [], i = 0;
+@@ -5225,9 +5225,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram requires you to do a simple account verification. Please complete it and come back and click the "Continue" button to start scraping. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#26] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -5243,9 +5241,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram returned a real HTTP 429 rate-limit. This build now pauses requests and honors Retry-After; if Instagram does not provide one, it enforces a 60-minute cooldown. Do not repeatedly click Continue during the cooldown. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#27] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -5465,17 +5461,139 @@
+             } }));
+           },
+           saveExtractRows: function () {
+-            var key = "extract_list_".concat(this.lastHistoryItem.id), data = {}, index;
+-            if (!this.lastHistoryItem.id) return;
+-            index = this.localStorageExtractKeys.findIndex(function (item) { return item.key === key; });
+-            if (-1 !== index) this.localStorageExtractKeys.splice(index, 1, { key: key, date: h()().valueOf() });
+-            else this.localStorageExtractKeys.push({ key: key, date: h()().valueOf() });
+-            data[key] = this.lastExtractData.concat(this.userList);
+-            data.localStorageExtractKeys = this.localStorageExtractKeys;
+-            d.a.storage.local.set(data).catch(function (error) {
++            return this.persistExtractRows();
++          },
++          mergeExtractRows: function (saved, current) {
++            // One row per profile (this session's result replaces an older one), and only the
++            // published contact field may fill the email column, whatever version saved the row.
++            var P = window.IGPublicContacts, own = Object.prototype.hasOwnProperty, byId = {}, byName = {}, merged = [];
++            [].concat(saved || [], current || []).forEach(function (row) {
++              if (!row || "object" !== typeof row) return;
++              var clean = P.commercialRow(row), id = clean.userId ? String(clean.userId) : "",
++                name = clean.userName ? String(clean.userName).toLowerCase() : "", at = -1;
++              if (id && own.call(byId, id)) at = byId[id];
++              else if (name && own.call(byName, name)) {
++                var other = merged[byName[name]];
++                if (!(id && other && other.userId && String(other.userId) !== id)) at = byName[name];
++              }
++              if (at < 0) { at = merged.length; merged.push(clean); } else merged[at] = clean;
++              if (id) byId[id] = at;
++              if (name) byName[name] = at;
++            });
++            return merged;
++          },
++          extractRowsLock: function (job) {
++            // Every dashboard shares the row index: serialize read-modify-write across tabs.
++            return navigator.locks && navigator.locks.request ? navigator.locks.request("ig_extract_rows", job) : job();
++          },
++          persistExtractRows: function () {
++            var self = this, id = self.lastHistoryItem && self.lastHistoryItem.id;
++            if (!id) return Promise.resolve();
++            var key = "extract_list_".concat(id);
++            return Promise.resolve(self.extractRowsLock(function () {
++              return d.a.storage.local.get("localStorageExtractKeys").then(function (saved) {
++                // Re-read the index so entries and fresher dates written by another dashboard survive.
++                var keys = (Array.isArray(saved && saved.localStorageExtractKeys) ? saved.localStorageExtractKeys : [])
++                  .filter(function (item) { return item && item.key && item.key !== key; });
++                keys.push({ key: key, date: h()().valueOf() });
++                self.localStorageExtractKeys = keys;
++                var data = { localStorageExtractKeys: keys };
++                data[key] = self.mergeExtractRows(self.lastExtractData, self.processedList);
++                return d.a.storage.local.set(data);
++              });
++            })).catch(function (error) {
+               console.warn("[IG Extractor] Could not save rows", error);
+             });
+           },
++          pruneExtractIndex: function () {
++            // Same lock as the saves, so a date refreshed by another dashboard is seen before deleting.
++            return this.extractRowsLock(function () {
++              return d.a.storage.local.get("localStorageExtractKeys").then(function (saved) {
++                var latest = {}, order = [];
++                (Array.isArray(saved && saved.localStorageExtractKeys) ? saved.localStorageExtractKeys : []).forEach(function (item) {
++                  if (!item || !item.key) return;
++                  if (!Object.prototype.hasOwnProperty.call(latest, item.key)) { order.push(item.key); latest[item.key] = item; }
++                  else if (Number(item.date) > Number(latest[item.key].date)) latest[item.key] = item;
++                });
++                var kept = [], expired = [];
++                order.forEach(function (k) {
++                  (h()(latest[k].date).add(190, "day") >= h()() ? kept : expired).push(latest[k]);
++                });
++                var done = { localStorageExtractKeys: kept };
++                if (!expired.length && kept.length === ((saved && saved.localStorageExtractKeys) || []).length) return done;
++                return d.a.storage.local.remove(expired.map(function (item) { return item.key; })).then(function () {
++                  return d.a.storage.local.set({ localStorageExtractKeys: kept });
++                }).then(function () { return done; });
++              });
++            });
++          },
++          historyEmailCount: function () {
++            // Count the emails really stored for this history: older server counts can include
++            // bio emails collected by earlier versions.
++            if (this.lastExtractData && this.lastExtractData.length)
++              return this.mergeExtractRows(this.lastExtractData, this.processedList).filter(function (row) { return !!row.email; }).length;
++            return (Number(this.lastHistoryItem.count) || 0) + this.emailList.length;
++          },
++          dropResumedRows: function (items, idKey) {
++            // Resume: never list again a profile already stored for this history.
++            var done = this.resumedRowIds;
++            if (!done || !items || !items.length) return items;
++            return items.filter(function (item) {
++              var id = v()(item, idKey, "");
++              return !id || !Object.prototype.hasOwnProperty.call(done, String(id));
++            });
++          },
++          restoreExtractRows: function (rows, history) {
++            // Rows of earlier sessions, cleaned. When they exist they decide what is skipped on
++            // resume, because counters saved by older versions are not reliable (Comment mode
++            // counted listed commenters as extracted; the DJ filter hid rows from the count).
++            // Rows that were never checked, or failed, are dropped so they get listed again.
++            var ids = {}, names = {};
++            var kept = this.mergeExtractRows(rows, []).filter(function (row) {
++              return !!row.loaded && false !== row.detailLoaded;
++            });
++            kept.forEach(function (row) {
++              if (row.userId) ids[String(row.userId)] = !0;
++              if (row.userName) names[String(row.userName).toLowerCase()] = !0;
++            });
++            this.lastExtractData = kept;
++            if (kept.length) {
++              this.resumedRowIds = ids;
++              this.resumedRowNames = names;
++              this.skipCount = 0;
++            } else if (4 === this.type) {
++              // No row stored here for this Comment history. Before PATCHED 15 the server count
++              // included commenters that were only listed (a 429 on the first check stored no row),
++              // so trusting it would skip people never checked. Only a PATCHED 15+ count is used.
++              var version = String((history && history.get && history.get("version")) || ""),
++                patched = version.match(/PATCHED (\d+)/);
++              if (!patched || Number(patched[1]) < 15) this.skipCount = 0;
++            }
++          },
++          dropResumedNames: function (names) {
++            var done = this.resumedRowNames;
++            if (!done || !names || !names.length) return names;
++            return names.filter(function (name) {
++              return !Object.prototype.hasOwnProperty.call(done, String(name).toLowerCase());
++            });
++          },
++          recordDetailRow: function (index, userId, patch) {
++            var row = this.followList[index];
++            if (!row || String(row.userId) !== String(userId)) return false;
++            this.followList.splice(index, 1, Object.assign({}, row, patch, { loaded: !0, contactCheckedAt: Date.now() }));
++            this.persistExtractRows();
++            return true;
++          },
++          isExtractionDone: function () {
++            var processed = this.processedList.length;
++            if (4 === this.type)
++              return !this.pageInfo.has_next_page && this.followList.length > 0 &&
++                this.followList.every(function (row) { return !!row.detailLoaded; });
++            if (6 === this.type) return this.followList.length > 0 && this.followList.length <= processed;
++            // List modes: the list said there is no next page and every listed row was handled
++            // (an empty list counts as done too).
++            return !this.pageInfo.has_next_page && this.followList.length <= processed;
++          },
+           handleContactProbe: function () {
+             var t = this, username = String(t.contactProbeUsername || "").trim().replace(/^@/, "").toLowerCase();
+             if (t.contactProbeRunning || (!t.isPaused && !t.isComplete) || t.retryAfterUntil > Date.now()) return;
+@@ -5590,6 +5708,7 @@
+                                   )),
+                                   (t.skipCount = 0))
+                                 : (t.customUserList = [])),
++                            (t.customUserList = t.dropResumedNames(t.customUserList)),
+                             !(t.customUserList.length > 0))
+                           ) {
+                             e.next = 16;
+@@ -5628,6 +5747,11 @@
+                             (e.next = 18);
+                           break;
+                         case 16:
++                          if (0 === t.followList.length && !t.isComplete) {
++                            t.persistExtractRows();
++                            t.updateHistory({ isFromComplete: !0 });
++                            t.isComplete = !0;
++                          }
+                           return console.log("stop"), e.abrupt("return");
+                         case 18:
+                           return (
+@@ -5640,13 +5764,19 @@
+                           );
+                         case 21:
+                           if (!t.isExtractionCycleCurrent(extractionCycle)) return e.abrupt("return");
+-                          (a = e.sent),
++                          a = e.sent;
++                          // Paused or superseded while the name was resolved: nothing to record.
++                          if (void 0 === a) return e.abrupt("return");
+                             (i = Object.assign(
+                               {},
+                               t.followList[extractionCycle.userIndex],
+-                              a
++                              a && a.userId
++                                ? a
++                                : // No profile behind this name: never request /users//info/ with an empty id.
++                                  { fullName: "This user may not exist", emailStatus: "profile_unavailable", loaded: !0 }
+                             )),
+                             t.followList.splice(extractionCycle.userIndex, 1, i),
++                            i.loaded && t.persistExtractRows(),
+                             (e.next = 31);
+                           break;
+                         case 26:
+@@ -5658,12 +5788,25 @@
+                             (n = Object.assign(
+                               {},
+                               t.followList[extractionCycle.userIndex],
+-                              {
+-                                fullName: "This user may not exist",
+-                                loaded: !0,
+-                              }
++                              e.t0 && e.t0.response && 404 === e.t0.response.status
++                                ? {
++                                    fullName: "This user may not exist",
++                                    emailStatus: "profile_unavailable",
++                                    loaded: !0,
++                                  }
++                                : {
++                                    // Not a missing profile (network, server error): keep it retryable on resume.
++                                    loaded: !0,
++                                    detailLoaded: !1,
++                                    contactFailure: {
++                                      code: e.t0 && e.t0.response ? "request" : "network",
++                                      status: (e.t0 && e.t0.response && e.t0.response.status) || 0,
++                                      at: Date.now(),
++                                    },
++                                  }
+                             )),
+-                            t.followList.splice(extractionCycle.userIndex, 1, n);
++                            t.followList.splice(extractionCycle.userIndex, 1, n),
++                            t.persistExtractRows();
+                         case 31:
+                           0 === extractionCycle.userIndex && (t.isLoading = !1);
+                         case 32:
+@@ -5674,10 +5817,10 @@
+                             extractionCycle.waiting = !1;
+                             if (!t.isExtractionCycleCurrent(extractionCycle)) return t.finishExtractionCycle("detail", extractionCycle);
+                             if (t.loadUserIndex >= t.followList.length) {
+-                              // Comment mode: every commenter answered and no page left — finish
+-                              // instead of looping, even if the queue paused on the last row.
+-                              if (4 === t.type && !t.pageInfo.has_next_page && t.followList.length > 0 &&
+-                                  t.followList.every(function (row) { return !!row.detailLoaded; })) {
++                              // Every row answered (or was recorded as unavailable/failed) and no page
++                              // left: finish instead of looping, even if the queue paused on the last row.
++                              if (t.isExtractionDone()) {
++                                t.persistExtractRows();
+                                 t.updateHistory({ isFromComplete: !0 });
+                                 document.body.scrollTop = 0;
+                                 document.documentElement.scrollTop = 0;
+@@ -5698,8 +5841,9 @@
+                               6 === t.type &&
+                               t.followList[t.loadUserIndex].loaded
+                             ) {
+-                              if (t.followList.length <= t.userList.length)
++                              if (t.followList.length <= t.processedList.length)
+                                 return (
++                                  t.persistExtractRows(),
+                                   t.updateHistory({ isFromComplete: !0 }),
+                                   (document.body.scrollTop = 0),
+                                   (document.documentElement.scrollTop = 0),
+@@ -5783,7 +5927,9 @@
+                                                     e.next = 37;
+                                                     break;
+                                                   }
+-                                                  if (4 === t.type) t.consecutiveUnavailableProfiles = 0;
++                                                  // A profile answered: error counters are about consecutive failures.
++                                                  t.consecutiveUnavailableProfiles = 0;
++                                                  t.detailCatchTimes = 0;
+                                                   if (
+                                                     ((a = v()(
+                                                       s,
+@@ -5873,7 +6019,7 @@
+                                                       console.log(D);
+                                                     }
+                                                   // Use the same validated parser for GraphQL and existing detail envelopes.
+-                                                  var contactProfile = window.IGPublicContacts.profileFromResponse(s, detailUserId, g.userName);
++                                                  var contactProfile = window.IGPublicContacts.profileFromResponse(s, detailUserId, 4 === t.type ? g.userName : "");
+                                                   var contacts = s.publicContactResult || window.IGPublicContacts.extract(
+                                                     contactProfile || { biography: n[16] || "", external_url: n[15] || "" }
+                                                   );
+@@ -5928,50 +6074,7 @@
+                                                       g
+                                                     );
+                                                   extractionCycle.processedIndex = detailUserIndex;
+-                                                  try {
+-                                                    (I = "extract_list_".concat(
+-                                                      t.lastHistoryItem.id
+-                                                    )),
+-                                                      (P =
+-                                                        t.localStorageExtractKeys.findIndex(
+-                                                          function (t) {
+-                                                            return t.key === I;
+-                                                          }
+-                                                        )),
+-                                                      -1 !== P
+-                                                        ? t.localStorageExtractKeys.splice(
+-                                                            P,
+-                                                            1,
+-                                                            {
+-                                                              key: I,
+-                                                              date: h()().valueOf(),
+-                                                            }
+-                                                          )
+-                                                        : t.localStorageExtractKeys.push(
+-                                                            {
+-                                                              key: I,
+-                                                              date: h()().valueOf(),
+-                                                            }
+-                                                          ),
+-                                                      d.a.storage.local.set(
+-                                                        ((L = {}),
+-                                                        Object(r["a"])(
+-                                                          L,
+-                                                          I,
+-                                                          t.lastExtractData.concat(
+-                                                            t.userList
+-                                                          )
+-                                                        ),
+-                                                        Object(r["a"])(
+-                                                          L,
+-                                                          "localStorageExtractKeys",
+-                                                          t.localStorageExtractKeys
+-                                                        ),
+-                                                        L)
+-                                                      );
+-                                                  } catch (D) {
+-                                                    console.log(D);
+-                                                  }
++                                                  t.persistExtractRows();
+                                                   if (4 === t.type) {
+                                                     t.refreshCommercialEvidence();
+                                                     // Only repeated professional omissions block the route (see reader).
+@@ -6029,8 +6132,9 @@
+                                                   e.next = 37;
+                                                   break;
+                                                 case 36:
+-                                                  "string" === typeof s.data &&
+-                                                    (t.$buefy.notification.open(
++                                                  if ("string" === typeof s.data) {
++                                                    // Login/HTML page instead of JSON: keep this profile as the next one to retry.
++                                                    t.$buefy.notification.open(
+                                                       {
+                                                         indefinite: !0,
+                                                         message:
+@@ -6040,9 +6144,17 @@
+                                                         type: "is-danger",
+                                                         hasIcon: !0,
+                                                       }
+-                                                    ),
+-                                                    (t.isPaused = !0),
+-                                                    t.autoContinue());
++                                                    );
++                                                    t.loadUserIndex = detailUserIndex;
++                                                    t.isPaused = !0;
++                                                    t.autoContinue();
++                                                    return e.abrupt("return");
++                                                  }
++                                                  // JSON without status "ok": record the failure so the task can still finish.
++                                                  t.recordDetailRow(detailUserIndex, detailUserId, {
++                                                    detailLoaded: !1,
++                                                    contactFailure: { code: "unexpected_response", status: (s && s.status) || 0, at: Date.now() }
++                                                  });
+                                                 case 37:
+                                                   if (!t.isComplete) {
+                                                     e.next = 39;
+@@ -6051,8 +6163,7 @@
+                                                   return e.abrupt("return");
+                                                 case 39:
+                                                   if (
+-                                                    (t.userList.length > 0 &&
+-                                                      t.userList.length %
++                                                    ((t.claimRefreshCount = (t.claimRefreshCount || 0) + 1) %
+                                                         100 ===
+                                                         0 &&
+                                                       d.a.tabs.create({
+@@ -6064,28 +6175,13 @@
+                                                         ),
+                                                         active: !1,
+                                                       }),
+-                                                    !(
+-                                                      (4 === t.type &&
+-                                                        !t.pageInfo.has_next_page &&
+-                                                        t.followList.length > 0 &&
+-                                                        t.followList.every(function (e) {
+-                                                          return !!e.detailLoaded;
+-                                                        })) ||
+-                                                      (4 !== t.type &&
+-                                                        6 !== t.type &&
+-                                                        !t.pageInfo
+-                                                          .has_next_page &&
+-                                                        t.followList.length <=
+-                                                          t.userList.length) ||
+-                                                      (6 === t.type &&
+-                                                        t.followList.length <=
+-                                                          t.userList.length)
+-                                                    ))
++                                                    !t.isExtractionDone())
+                                                   ) {
+                                                     e.next = 46;
+                                                     break;
+                                                   }
+                                                   return (
++                                                    t.persistExtractRows(),
+                                                     t.updateHistory({
+                                                       isFromComplete: !0,
+                                                     }),
+@@ -6164,6 +6260,28 @@
+                                     });
+                                     return;
+                                   }
++                                  if (e && e.response && 404 === e.response.status) {
++                                    // Deleted or deactivated account: record it and move on, without retrying it.
++                                    var missingRow = t.followList[detailUserIndex] || {};
++                                    t.recordDetailRow(detailUserIndex, detailUserId, {
++                                      fullName: missingRow.fullName || "This user may not exist",
++                                      email: "", emailStatus: "profile_unavailable", contactFailure: null, detailLoaded: !0
++                                    });
++                                    t.detailCatchTimes = 0;
++                                    t.loadUserIndex = detailUserIndex + 1;
++                                    t.consecutiveUnavailableProfiles = (t.consecutiveUnavailableProfiles || 0) + 1;
++                                    if (t.consecutiveUnavailableProfiles >= 3) {
++                                      t.manualPause = !0;
++                                      t.pauseExtraction();
++                                      t.updateHistory();
++                                      t.$buefy.notification.open({
++                                        indefinite: !0, position: "is-bottom-right", type: "is-warning", hasIcon: !0,
++                                        message: "Três perfis seguidos não foram encontrados pelo Instagram (HTTP 404). A extração foi pausada para você conferir a sessão no instagram.com; depois clique em Continue. Nenhuma nova tentativa automática."
++                                      });
++                                      return;
++                                    }
++                                    return void t.advanceExtractionCycle("detail", extractionCycle, "loadUserInfoDetail");
++                                  }
+                                   return (
+                                     console.log(
+                                       "🚀 loadUserInfoDetail ~ error",
+@@ -6190,9 +6308,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram requires you to do a simple account verification. Please complete it and come back and click the "Continue" button to start scraping. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#3] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -6208,9 +6324,7 @@
+                                             'Oops! Something went wrong, the task has been suspended, <div style="font-weight:500;">Instagram returned a real HTTP 429 rate-limit. This build now pauses requests and honors Retry-After; if Instagram does not provide one, it enforces a 60-minute cooldown. Do not repeatedly click Continue during the cooldown. <a style="color:#fff810;" target="_blank" href="https://www.instagram.com/">Go to instagram.com</a></div><div style="font-size:12px;font-style:italic;">error: [#4] '
+                                               .concat(e.message || "", " ")
+                                               .concat(
+-                                                (e.response.data &&
+-                                                  e.response.data.message) ||
+-                                                  "",
++                                                String((e.response.data && e.response.data.message) || "").replace(/[<>&"']/g, ""),
+                                                 "</div>"
+                                               ),
+                                           position: "is-bottom-right",
+@@ -6231,7 +6345,11 @@
+                                           }),
+                                         void (t.detailCatchTimes < 10
+                                           ? (t.detailCatchTimes > 1 &&
+-                                              (t.loadUserIndex = detailUserIndex + 1),
++                                              (t.recordDetailRow(detailUserIndex, detailUserId, {
++                                                detailLoaded: !1,
++                                                contactFailure: { code: "request", status: (e && e.response && e.response.status) || 0, at: Date.now() }
++                                              }),
++                                              (t.loadUserIndex = detailUserIndex + 1)),
+                                             t.advanceExtractionCycle("detail", extractionCycle, "loadUserInfoDetail"))
+                                           : (t.$buefy.notification.open({
+                                               indefinite: !0,
+@@ -6487,7 +6605,7 @@
+             if (!n || this.lastHistoryItem.id) {
+               var c = 0;
+               if (a)
+-                c = this.lastHistoryItem.scrapedCount + this.userList.length;
++                c = this.lastHistoryItem.scrapedCount + this.processedList.length;
+               else {
+                 var l = 0;
+                 if (this.loadUserIndex > 0) {
+@@ -6504,13 +6622,13 @@
+                 p = {
+                   id: this.lastHistoryItem.id || "",
+                   token: this.lastHistoryItem.token || "",
+-                  count: this.lastHistoryItem.count + this.emailList.length,
++                  count: this.historyEmailCount(),
+                   lastCursor: this.currentCursor,
+                   extractionData: d,
+                   extractionType: this.extractionType,
+                   itemsCount: 0,
+                   scrapedCount:
+-                    this.lastHistoryItem.scrapedCount + this.userList.length,
++                    this.lastHistoryItem.scrapedCount + this.processedList.length,
+                   cursorScrapedCount: c,
+                   version: this.version,
+                   isFromComplete: a,
+@@ -6627,7 +6745,7 @@
+                           return (
+                             (e.prev = 8),
+                             (e.next = 11),
+-                            d.a.storage.local.get("localStorageExtractKeys")
++                            t.pruneExtractIndex()
+                           );
+                         case 11:
+                           if (!t.isExtractionCycleCurrent(extractionCycle)) return e.abrupt("return", !1);
+@@ -6841,10 +6959,11 @@
+                                               customUserList:
+                                                 s.get("customUserList"),
+                                             }),
+-                                            (t.skipCount =
++                                            (t.skipCount = Math.max(
++                                              0,
+                                               s.get("scrapedCount") -
+                                                 s.get("cursorScrapedCount") ||
+-                                              0),
++                                              0)),
+                                             (t.pageInfo = {
+                                               end_cursor: s.get("lastCursor"),
+                                               has_next_page: !0,
+@@ -6860,9 +6979,9 @@
+                                         case 7:
+                                           if (!t.isExtractionCycleCurrent(extractionCycle)) return e.abrupt("return");
+                                           (a = e.sent),
+-                                            (t.lastExtractData =
++                                            t.restoreExtractRows(
+                                               a["extract_list_".concat(w.id)] ||
+-                                              []),
++                                              [], s),
+                                             t.startLoadAllData();
+                                         case 10:
+                                         case "end":
+diff -ruN PATCHED-14/manifest.json PATCHED-15/manifest.json
+--- PATCHED-14/manifest.json	2026-10-02 22:07:47.210869436 +0000
++++ PATCHED-15/manifest.json	2026-10-05 09:21:40.000000000 +0000
+@@ -78,5 +78,5 @@
+          ]
+       }
+    ],
+-   "version_name": "2.5.1 PATCHED 14 - Contato comercial com diagnostico"
++   "version_name": "2.5.1 PATCHED 15 - Contato comercial com diagnostico"
+ }
+diff -ruN PATCHED-14/popup.html PATCHED-15/popup.html
+--- PATCHED-14/popup.html	2026-10-02 22:02:58.435945426 +0000
++++ PATCHED-15/popup.html	2026-10-05 09:21:22.000000000 +0000
+@@ -1 +1 @@
+-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autland IG Extractor</title><link href="/chunk-common.js" rel="preload" as="script"><link href="/chunk-vendors.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="preload" as="style"><link href="/css/popup.4471a0ce.css" rel="preload" as="style"><link href="/popup.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="stylesheet"><link href="/css/popup.4471a0ce.css" rel="stylesheet"></head><body><div id="app"></div><script src="/chunk-vendors.js"></script><script src="/chunk-common.js"></script><script src="/popup.js"></script></body></html>
+\ No newline at end of file
++<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autland IG Extractor</title><link href="/chunk-common.js" rel="preload" as="script"><link href="/chunk-vendors.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="preload" as="style"><link href="/css/popup.4471a0ce.css" rel="preload" as="style"><link href="/popup.js" rel="preload" as="script"><link href="/css/chunk-common.a8f1a41a.css" rel="stylesheet"><link href="/css/popup.4471a0ce.css" rel="stylesheet"></head><body><div id="app"></div><script src="/chunk-vendors.js"></script><script src="/chunk-common.js"></script><script src="/public-contact-parser.js"></script><script src="/popup.js"></script></body></html>
+\ No newline at end of file
+diff -ruN PATCHED-14/popup.js PATCHED-15/popup.js
+--- PATCHED-14/popup.js	2026-10-02 22:02:58.436013000 +0000
++++ PATCHED-15/popup.js	2026-10-05 09:49:34.000000000 +0000
+@@ -3268,7 +3268,8 @@
+           var t = this,
+             e = c.a.runtime.getManifest(),
+             a = e.version;
+-          (this.version = "v".concat(a)),
++          // Show the patch level too, so an installed update can be confirmed from the popup.
++          (this.version = "v".concat(a) + (/PATCHED \d+/.test(e.version_name || "") ? " · " + e.version_name.match(/PATCHED \d+/)[0] : "")),
+             this.initData(),
+             c.a.storage.onChanged.addListener(
+               (function () {
+@@ -3789,6 +3790,14 @@
+               })
+             )();
+           },
++          cleanHistoryRows: function (rows) {
++            // Rows saved by older versions may carry bio/site emails: only the published
++            // contact field may fill the email column (same rule as the dashboard).
++            var P = window.IGPublicContacts;
++            return (Array.isArray(rows) ? rows : []).map(function (row) {
++              return P ? P.commercialRow(row) : Object.assign({}, row, { email: "" });
++            });
++          },
+           loadExtractLocalData: function (t) {
+             var e = this;
+             return Object(o["a"])(
+@@ -3811,9 +3820,14 @@
+                         );
+                       case 6:
+                         (r = a.sent),
+-                          e.extractLocalData.push(
++                          (r = e.cleanHistoryRows(
+                             r["extract_list_".concat(i.id)] || []
+-                          );
++                          )),
++                          r.length > 0 &&
++                            (i.emailCount = r.filter(function (row) {
++                              return !!row.email;
++                            }).length),
++                          e.extractLocalData.push(r);
+                       case 8:
+                         s++, (a.next = 2);
+                         break;
+@@ -4285,6 +4299,11 @@
+               arguments.length > 2 && void 0 !== arguments[2]
+                 ? arguments[2]
+                 : "xlsx";
++            var P = window.IGPublicContacts,
++              statusOf = function (row) {
++                return P ? P.emailStatusText(row) : "";
++              };
++            e = this.cleanHistoryRows(e);
+             if (
+               ("email" === t &&
+                 (e = e.filter(function (t) {
+@@ -4299,7 +4318,8 @@
+                   { label: "Followers Count", value: "followers" },
+                   { label: "Following Count", value: "following" },
+                   { label: "Post Count", value: "post" },
+-                  { label: "Public Email", value: "email" },
++                  { label: "E-mail comercial", value: "email" },
++                  { label: "Status do e-mail", value: statusOf },
+                   { label: "Public Phone", value: "phone" },
+                   { label: "City", value: "city" },
+                   { label: "Address", value: "address" },
+@@ -4333,7 +4353,8 @@
+                   "Followers Count": t.followers + "",
+                   "Following Count": t.following + "",
+                   "Post Count": t.post + "",
+-                  "Public Email": t.email + "",
++                  "E-mail comercial": t.email + "",
++                  "Status do e-mail": statusOf(t),
+                   "Public Phone": t.phone + "",
+                   City: t.city + "",
+                   Address: t.address + "",
