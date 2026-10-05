@@ -58,6 +58,23 @@ async function launch(extDir, label) {
   ]);
   await ctx.addInitScript(() => {
     if (location.protocol === 'chrome-extension:') {
+      // Record every toast/notification text: they auto-dismiss before a poll can see them.
+      window.__toasts = [];
+      const startToastRecorder = () => {
+        const root = document.body || document.documentElement;
+        if (!root) { setTimeout(startToastRecorder, 50); return; }
+        const seen = new WeakSet();
+        new MutationObserver(() => {
+          document.querySelectorAll('.toast, .notification').forEach((el) => {
+            if (seen.has(el)) return;
+            seen.add(el);
+            const text = (el.innerText || '').trim();
+            if (text) window.__toasts.push(text);
+          });
+        }).observe(root, { childList: true, subtree: true });
+      };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startToastRecorder, { once: true });
+      else startToastRecorder();
       localStorage.setItem('Parse/echobot-igemailextractor/currentUser', JSON.stringify({
         objectId: 'userTest', username: 'tester', sessionToken: 'r:test',
         createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }));
@@ -85,6 +102,7 @@ async function install(ctx, scenario, log) {
     }
     if (u.host === 'www.instagram.com' && u.pathname.startsWith('/__test__/comments/')) {
       log.push({ t, kind: 'comments', url });
+      if (scenario.commentsStatus) return route.fulfill({ status: scenario.commentsStatus, contentType: 'application/json', body: JSON.stringify({ status: 'fail', message: 'login_required' }) });
       const comments = scenario.comments.map((c) => ({ user: { pk: String(c.pk), username: c.username, full_name: c.full_name || c.username, profile_pic_url: PIXEL } }));
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', comments, next_cursor: '', has_more: false, comment_count: comments.length }) });
     }
@@ -133,6 +151,7 @@ async function snapshot(page) {
         followers: r.followers, bio: r.bio, fullName: r.fullName })),
       emailList: vm.emailList.map(r => r.email),
       notifications: Array.from(document.querySelectorAll('.notification')).map(n => n.innerText.trim()).filter(Boolean),
+      toasts: Array.isArray(window.__toasts) ? window.__toasts.slice() : [],
       bodyText: document.body.innerText,
       storage: pick,
     };
@@ -167,4 +186,16 @@ async function waitFor(page, predicate, { timeout = 120000, every = 1000 } = {})
   return snap;
 }
 
-module.exports = { launch, install, snapshot, exportCsv, clickButton, waitFor, findVmSource, PIXEL };
+async function exportXlsxSheets(page, which) {
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 15000 }),
+    page.evaluate(`(() => { const vm = ${findVmSource()}; return vm.handleDownload(${JSON.stringify(which)}, ${which === 'email' ? 'vm.emailList' : 'vm.userList'}, 'xlsx'); })()`),
+  ]);
+  const p = path.join(os.tmpdir(), 'export-' + process.pid + '-' + Date.now() + '.xlsx');
+  await dl.saveAs(p);
+  const py = "import json,sys,openpyxl\nwb=openpyxl.load_workbook(sys.argv[1])\nprint(json.dumps({ws.title:[[('' if c is None else str(c)) for c in r] for r in ws.iter_rows(values_only=True)] for ws in wb.worksheets}))";
+  const out = require('child_process').execFileSync('python3', ['-c', py, p], { encoding: 'utf8' });
+  return JSON.parse(out);
+}
+
+module.exports = { exportXlsxSheets, launch, install, snapshot, exportCsv, clickButton, waitFor, findVmSource, PIXEL };

@@ -1,61 +1,56 @@
-PATCHED 14 — resultados dos testes (02/10/2026)
+PATCHED 14 — resultados dos testes (05/10/2026)
 
-IMPORTANTE: todos os testes abaixo usam respostas SIMULADAS do Instagram.
-Consultas reais ao Instagram feitas nesta preparação: 0.
-Nenhum teste comprova contato comercial público real.
+TESTES REAIS CONTRA O INSTAGRAM: NENHUM.
+O ambiente de build não alcança instagram.com (CONNECT www.instagram.com:443
+-> HTTP 403 da política de rede) e não tem a sessão do usuário.
+Todas as respostas abaixo são SIMULADAS. Ver RELATORIO.md.
 
-1) Sintaxe: node --check nos 12 arquivos JavaScript — OK. manifest.json e _locales válidos.
+1) SINTAXE: node --check nos 12 arquivos JavaScript - OK; manifest e _locales válidos.
 
-2) Unitários (parser e leitor, fetch simulado):
+2) UNITÁRIOS (parser e leitor, fetch simulado): 41/41.
 ok 1 - parser: business_email válido = found
 ok 2 - parser: public_email tem prioridade sobre business_email
 ok 3 - parser: conta pessoal nunca vira contato (com ou sem campo)
 ok 4 - parser: vazio, nulo e false = empty (campo retornado)
-ok 5 - parser: oculto (should_show_public_contacts=false) não coleta mesmo com valor
-ok 6 - parser: campo ausente em profissional = omitted; tipo desconhecido também
-ok 7 - parser: formato inválido = invalid
-ok 8 - parser: tipos de perfil
-ok 9 - parser: e-mail da bio, links e mailto nunca preenchem o e-mail
-ok 10 - parser: blocos especulativos (PATCHED 10-13) não são mais fonte de e-mail
-ok 11 - parser: telefone idêntico ao PATCHED 13 (sem regressão)
-ok 12 - parser: textos de status distintos e falhas de acesso
-ok 13 - parser: histórico — linhas antigas da bio são saneadas; linhas v13 válidas preservadas
-ok 14 - reader: requisição web normal (host, cabeçalhos, credenciais, sem seguir redirect)
-ok 15 - reader: 429 com Retry-After numérico salva pausa e registra evidência
-ok 16 - reader: 429 sem Retry-After = 60 min; data HTTP respeitada
-ok 17 - reader: pausa ativa impede qualquer consulta (inclusive verificação manual)
-ok 18 - reader: intervalo mínimo de 10 s entre consultas, serializadas
-ok 19 - reader: evidência sanitizada (campos, flags, e-mail mascarado)
-ok 20 - reader: pessoais sem campo não bloqueiam; 3 profissionais omitidos bloqueiam
-ok 21 - reader: contato oculto/sem campo não conta como consulta incompatível
-ok 22 - reader: um perfil com o campo impede a parada por omissão
-ok 23 - reader: verificação manual reavalia a decisão com evidência real
-ok 24 - reader: perfil inexistente/404/divergente = resultado por perfil (fila segue)
-ok 25 - reader: falhas de acesso distintas param sem nova tentativa
-ok 26 - reader: cancelamento após a resposta guarda em cache (retomada não repete consulta)
-ok 27 - reader: nome inválido não consulta; evidência limitada a 20
-# tests 27
-# pass 27
-# fail 0
+ok 5 - parser: "não entregue" só quando o perfil anuncia contato; sem método é "vazio"
+ok 6 - parser: contato retido = botão CALL/TEXT ativo com e-mail e telefone nulos
+ok 7 - parser: oculto (should_show_public_contacts=false) não coleta mesmo com valor
+ok 8 - parser: campo ausente em profissional = omitted; tipo desconhecido também
+ok 9 - parser: formato inválido = invalid
+ok 10 - parser: tipos de perfil
+ok 11 - parser: e-mail da bio, links e mailto nunca preenchem o e-mail
+ok 12 - parser: blocos especulativos (PATCHED 10-13) não são mais fonte de e-mail
+ok 13 - parser: telefone idêntico ao PATCHED 13 (sem regressão)
+ok 14 - parser: textos de status distintos e falhas de acesso
+ok 15 - parser: histórico — linhas antigas da bio são saneadas; linhas v13 válidas preservadas
+ok 16 - reader: requisição web normal (host, cabeçalhos, credenciais, sem seguir redirect)
+ok 17 - reader: 429 com Retry-After numérico salva pausa e registra evidência
+ok 18 - reader: 429 sem Retry-After = 60 min; data HTTP respeitada
+ok 19 - reader: pausa ativa impede qualquer consulta (inclusive verificação manual)
+ok 20 - reader: intervalo mínimo de 10 s entre consultas, serializadas
+ok 21 - reader: evidência sanitizada (campos, flags, e-mail mascarado)
+ok 22 - reader: pessoais sem campo não bloqueiam; 3 profissionais omitidos bloqueiam
+ok 23 - reader: contato oculto/sem campo não conta como consulta incompatível
+ok 24 - reader: um perfil com o campo impede a parada por omissão
+ok 25 - reader: verificação manual reavalia a decisão com evidência real
+ok 26 - reader: perfil inexistente/404/divergente = resultado por perfil (fila segue)
+ok 27 - reader: falhas de acesso distintas param sem nova tentativa
+ok 28 - reader: cancelamento após a resposta guarda em cache (retomada não repete consulta)
+ok 29 - reader: nome inválido não consulta; evidência limitada a 20
+ok 30 - reader: 3 comerciais com contato retido encerram a rota (motivo withheld)
+ok 31 - reader: um e-mail entregue impede o encerramento por retenção
+ok 32 - reader: verificação manual com e-mail entregue reabre rota encerrada por retenção
+ok 33 - reader: 429 repetido sinaliza recusa da rota mas NUNCA bloqueia a fila
+ok 34 - reader: HTTP 400 conta como recusa; 403 não
+ok 35 - reader: uma resposta de perfil real zera as recusas
+ok 36 - reader: HTTP 404 é resposta de perfil e zera as recusas
+ok 37 - reader: schema antigo (sem contador de respostas) não vira "nunca respondeu"
+ok 38 - reader: divergência de identidade em cache não é servida ao perfil retornado
+ok 39 - reader: mensagem do Instagram nunca chega como HTML às notificações
+ok 40 - reader: 404 conta como resposta da consulta, mas não como perfil entregue
+ok 41 - reader: a parada por decisão de rota informa o motivo
 
-3) Ponta a ponta — dashboard real carregado como extensão no Chromium;
-   chrome.storage, navigator.locks e fetch reais; TODA resposta de rede simulada;
-   qualquer host não simulado é bloqueado e reprovaria o teste.
---- diagnóstico copiado (simulado) ---
-Autland IG Extractor v2.5.1 · PATCHED 14 · Contato comercial com diagnóstico
-Consulta: GET www.instagram.com/api/v1/users/web_profile_info/ (instagram_web_profile_info)
-Pausa salva: nenhuma ativa
-Campo de e-mail presente em 1 resposta(s) (@controle_loja); omitido em 3 perfil(is) profissional(is) (@loja_om1, @loja_om2, @criador_om); outras respostas sem o campo: 1
-Decisão da fila: liberada
-Contato comercial público em resposta real: SIM — @controle_loja em 10/2/2026, 10:20:49 PM (v***@controle.com.br)
-Últimas respostas reais (mais recente primeiro):
-1) 10/2/2026, 10:20:49 PM · @controle_loja · verificação manual · HTTP 200 · resultado=found · tipo=business · business_email=valid public_email=absent · business_contact_method=UNKNOWN is_business_account=true is_private=false is_professional_account=true should_show_public_contacts=true · e-mail=v***@controle.com.br
-2) 10/2/2026, 10:20:15 PM · @criador_om · HTTP 200 · resultado=omitted · tipo=creator · business_email=absent public_email=absent · is_business_account=false is_private=false is_professional_account=true
-3) 10/2/2026, 10:20:00 PM · @loja_om2 · HTTP 200 · resultado=omitted · tipo=business · business_email=absent public_email=absent · is_business_account=true is_private=false is_professional_account=true
-4) 10/2/2026, 10:19:47 PM · @loja_om1 · HTTP 200 · resultado=omitted · tipo=business · business_email=absent public_email=absent · is_business_account=true is_private=false is_professional_account=true
-5) 10/2/2026, 10:19:36 PM · @pessoal_x · HTTP 200 · resultado=not_professional · tipo=personal · business_email=absent public_email=absent · is_business_account=false is_private=false is_professional_account=false
-Campos do perfil na última resposta com perfil (@controle_loja, 19): bio_links, biography, business_contact_method, business_email, category_name, edge_follow, edge_followed_by, edge_owner_to_timeline_media, external_url, full_name, id, is_business_account, is_private, is_professional_account, is_verified, profile_pic_url, profile_pic_url_hd, should_show_public_contacts, username
----
+3) PONTA A PONTA (dashboard real no Chromium, toda a rede simulada): 163/163.
 PASS  v14:tipos_mistos  não inicia sozinho
 PASS  v14:verificacao_429  nenhuma chamada a /users/{id}/info/
 PASS  v14:verificacao_429  nenhum host externo não simulado
@@ -66,16 +61,6 @@ PASS  v14:verificacao_429  verificação recebeu 429: 1 consulta, pausa salva pe
 PASS  v14:verificacao_429  durante a pausa: verificação e Iniciar desabilitados
 PASS  v14:verificacao_429  nenhuma consulta automática depois do 429
 PASS  v14:verificacao_429  diagnóstico registra HTTP 429 e Retry-After
-PASS  v14:primeiro_429_sem_retry_after  nenhuma chamada a /users/{id}/info/
-PASS  v14:primeiro_429_sem_retry_after  nenhum host externo não simulado
-PASS  v14:primeiro_429_sem_retry_after  intervalo >= 10 s entre consultas de perfil
-PASS  v14:primeiro_429_sem_retry_after  X-IG-App-ID web padrão, sem troca de host
-PASS  v14:primeiro_429_sem_retry_after  sem erro JavaScript na página
-PASS  v14:primeiro_429_sem_retry_after  apenas 1 consulta e nenhuma repetição automática
-PASS  v14:primeiro_429_sem_retry_after  pausa persistida conforme Retry-After/60 min
-PASS  v14:primeiro_429_sem_retry_after  após recarregar: pausa ativa e Iniciar desabilitado
-PASS  v14:primeiro_429_sem_retry_after  aviso de HTTP 429 exibido
-PASS  v14:primeiro_429_sem_retry_after  linha marcada com falha de acesso 429 (não como e-mail ausente)
 PASS  v14:primeiro_429  nenhuma chamada a /users/{id}/info/
 PASS  v14:primeiro_429  nenhum host externo não simulado
 PASS  v14:primeiro_429  intervalo >= 10 s entre consultas de perfil
@@ -86,6 +71,18 @@ PASS  v14:primeiro_429  pausa persistida conforme Retry-After/60 min
 PASS  v14:primeiro_429  após recarregar: pausa ativa e Iniciar desabilitado
 PASS  v14:primeiro_429  aviso de HTTP 429 exibido
 PASS  v14:primeiro_429  linha marcada com falha de acesso 429 (não como e-mail ausente)
+PASS  v14:retido_pela_web  nenhuma chamada a /users/{id}/info/
+PASS  v14:retido_pela_web  nenhum host externo não simulado
+PASS  v14:retido_pela_web  intervalo >= 10 s entre consultas de perfil
+PASS  v14:retido_pela_web  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:retido_pela_web  sem erro JavaScript na página
+PASS  v14:retido_pela_web  encerra no 3º comercial com contato retido; pessoal não conta
+PASS  v14:retido_pela_web  status "não entregue pela consulta web" nos retidos
+PASS  v14:retido_pela_web  e-mail da bio não usado
+PASS  v14:retido_pela_web  aviso automático explica a retenção
+PASS  v14:retido_pela_web  decisão persiste após recarga (Iniciar desabilitado)
+PASS  v14:retido_pela_web  XLSX traz decisão e retenção no diagnóstico
+PASS  v14:retido_pela_web  nenhuma consulta após o encerramento (inclusive após recarregar)
 PASS  v14:tipos_mistos  nenhuma chamada a /users/{id}/info/
 PASS  v14:tipos_mistos  nenhum host externo não simulado
 PASS  v14:tipos_mistos  intervalo >= 10 s entre consultas de perfil
@@ -102,13 +99,50 @@ PASS  v14:tipos_mistos  fila não parou por perfil pessoal/omitido
 PASS  v14:tipos_mistos  cada perfil consultado uma única vez
 PASS  v14:tipos_mistos  único e-mail = campo comercial (bio ignorada)
 PASS  v14:tipos_mistos  e-mail oculto não coletado
-PASS  v14:tipos_mistos  textos distintos: vazio/oculto/omitido/pessoal
+PASS  v14:tipos_mistos  textos distintos: vazio/oculto/pessoal/indisponível/encontrado
+PASS  v14:tipos_mistos  sem método de contato anunciado, nada é rotulado como retido
 PASS  v14:tipos_mistos  perfil apagado preserva nome do comentário
 PASS  v14:tipos_mistos  CSV de e-mails: coluna "E-mail comercial" só com o contato comercial
 PASS  v14:tipos_mistos  CSV completo: coluna de e-mail sem bio/oculto/pessoal
 PASS  v14:tipos_mistos  CSV completo tem 7 linhas e coluna de status
+PASS  v14:tipos_mistos  XLSX: aba de dados + 2 abas de diagnóstico automáticas
+PASS  v14:tipos_mistos  XLSX diagnóstico: campo omitido x nulo x vazio por perfil
+PASS  v14:tipos_mistos  XLSX diagnóstico: sinal de contato oculto registrado
+PASS  v14:tipos_mistos  XLSX diagnóstico: sem e-mail completo nas abas de diagnóstico
+PASS  v14:tipos_mistos  XLSX dados: coluna E-mail comercial só com o contato do campo
 PASS  v14:tipos_mistos  histórico local salvo (extract_list_*)
 PASS  v14:tipos_mistos  evidência sanitizada registrada (sem e-mail completo)
+PASS  v14:export_vazio  nenhuma chamada a /users/{id}/info/
+PASS  v14:export_vazio  nenhum host externo não simulado
+PASS  v14:export_vazio  intervalo >= 10 s entre consultas de perfil
+PASS  v14:export_vazio  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:export_vazio  sem erro JavaScript na página
+PASS  v14:export_vazio  linhas carregadas sem nenhuma consulta de perfil concluída
+PASS  v14:export_vazio  XLSX com as 3 abas mesmo sem diagnóstico
+PASS  v14:export_vazio  aba de diagnóstico lista os 2 perfis com "-" nos campos
+PASS  v14:export_vazio  status mostra aguardando consulta
+PASS  v14:export_vazio  aba de respostas reais diz que não há prova
+PASS  v14:export_vazio  CSV exporta as 2 linhas
+PASS  v14:export_vazio  sem erro de página após exportar
+PASS  v14:pausa_compartilhada  nenhuma chamada a /users/{id}/info/
+PASS  v14:pausa_compartilhada  nenhum host externo não simulado
+PASS  v14:pausa_compartilhada  intervalo >= 10 s entre consultas de perfil
+PASS  v14:pausa_compartilhada  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:pausa_compartilhada  sem erro JavaScript na página
+PASS  v14:pausa_compartilhada  nenhuma consulta de perfil durante a pausa de outro dashboard
+PASS  v14:pausa_compartilhada  nenhuma leitura de comentários durante a pausa
+PASS  v14:pausa_compartilhada  aviso explica a pausa salva
+PASS  v14:pausa_compartilhada  pausa salva preservada e refletida na tela
+PASS  v14:prova_persistente  nenhuma chamada a /users/{id}/info/
+PASS  v14:prova_persistente  nenhum host externo não simulado
+PASS  v14:prova_persistente  intervalo >= 10 s entre consultas de perfil
+PASS  v14:prova_persistente  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:prova_persistente  sem erro JavaScript na página
+PASS  v14:prova_persistente  prova real registrada no schema
+PASS  v14:prova_persistente  e-mail da prova fica mascarado no schema
+PASS  v14:prova_persistente  prova sobrevive ao log rolante e à recarga
+PASS  v14:prova_persistente  diagnóstico confirma a prova após recarga
+PASS  v14:prova_persistente  fila concluída (não ficou em laço)
 PASS  v14:omitidos_profissionais  nenhuma chamada a /users/{id}/info/
 PASS  v14:omitidos_profissionais  nenhum host externo não simulado
 PASS  v14:omitidos_profissionais  intervalo >= 10 s entre consultas de perfil
@@ -123,23 +157,6 @@ PASS  v14:omitidos_profissionais  verificação manual de 1 perfil executou 1 co
 PASS  v14:omitidos_profissionais  campo presente na verificação reabre a fila
 PASS  v14:omitidos_profissionais  diagnóstico mostra HTTP 200, campo e tipo
 PASS  v14:omitidos_profissionais  verificação não adiciona linha à tabela
-
-67/67 verificações OK
-PASS  v14:identidade  nenhuma chamada a /users/{id}/info/
-PASS  v14:identidade  nenhum host externo não simulado
-PASS  v14:identidade  intervalo >= 10 s entre consultas de perfil
-PASS  v14:identidade  X-IG-App-ID web padrão, sem troca de host
-PASS  v14:identidade  sem erro JavaScript na página
-PASS  v14:identidade  perfil divergente marcado e não aplicado
-PASS  v14:identidade  fila segue para o próximo perfil
-PASS  v14:falha_html  nenhuma chamada a /users/{id}/info/
-PASS  v14:falha_html  nenhum host externo não simulado
-PASS  v14:falha_html  intervalo >= 10 s entre consultas de perfil
-PASS  v14:falha_html  X-IG-App-ID web padrão, sem troca de host
-PASS  v14:falha_html  sem erro JavaScript na página
-PASS  v14:falha_html  parou após 1 consulta, sem repetição automática
-PASS  v14:falha_html  linha marcada com falha (invalid_response)
-PASS  v14:falha_html  próximo perfil não consultado
 PASS  v14:falha_http403  nenhuma chamada a /users/{id}/info/
 PASS  v14:falha_http403  nenhum host externo não simulado
 PASS  v14:falha_http403  intervalo >= 10 s entre consultas de perfil
@@ -148,6 +165,14 @@ PASS  v14:falha_http403  sem erro JavaScript na página
 PASS  v14:falha_http403  parou após 1 consulta, sem repetição automática
 PASS  v14:falha_http403  linha marcada com falha (access)
 PASS  v14:falha_http403  próximo perfil não consultado
+PASS  v14:falha_html  nenhuma chamada a /users/{id}/info/
+PASS  v14:falha_html  nenhum host externo não simulado
+PASS  v14:falha_html  intervalo >= 10 s entre consultas de perfil
+PASS  v14:falha_html  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:falha_html  sem erro JavaScript na página
+PASS  v14:falha_html  parou após 1 consulta, sem repetição automática
+PASS  v14:falha_html  linha marcada com falha (invalid_response)
+PASS  v14:falha_html  próximo perfil não consultado
 PASS  v14:falha_redirect  nenhuma chamada a /users/{id}/info/
 PASS  v14:falha_redirect  nenhum host externo não simulado
 PASS  v14:falha_redirect  intervalo >= 10 s entre consultas de perfil
@@ -156,6 +181,31 @@ PASS  v14:falha_redirect  sem erro JavaScript na página
 PASS  v14:falha_redirect  parou após 1 consulta, sem repetição automática
 PASS  v14:falha_redirect  linha marcada com falha (redirect)
 PASS  v14:falha_redirect  próximo perfil não consultado
+PASS  v14:lista_sem_retry  nenhuma chamada a /users/{id}/info/
+PASS  v14:lista_sem_retry  nenhum host externo não simulado
+PASS  v14:lista_sem_retry  intervalo >= 10 s entre consultas de perfil
+PASS  v14:lista_sem_retry  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:lista_sem_retry  sem erro JavaScript na página
+PASS  v14:lista_sem_retry  403 na lista pausa sem repetição automática
+PASS  v14:lista_sem_retry  mensagem em português explica a pausa
+PASS  v14:lista_sem_retry  nenhuma consulta de perfil disparada
+PASS  v14:identidade  nenhuma chamada a /users/{id}/info/
+PASS  v14:identidade  nenhum host externo não simulado
+PASS  v14:identidade  intervalo >= 10 s entre consultas de perfil
+PASS  v14:identidade  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:identidade  sem erro JavaScript na página
+PASS  v14:identidade  perfil divergente marcado e não aplicado
+PASS  v14:identidade  fila segue para o próximo perfil
+PASS  v14:primeiro_429_sem_retry_after  nenhuma chamada a /users/{id}/info/
+PASS  v14:primeiro_429_sem_retry_after  nenhum host externo não simulado
+PASS  v14:primeiro_429_sem_retry_after  intervalo >= 10 s entre consultas de perfil
+PASS  v14:primeiro_429_sem_retry_after  X-IG-App-ID web padrão, sem troca de host
+PASS  v14:primeiro_429_sem_retry_after  sem erro JavaScript na página
+PASS  v14:primeiro_429_sem_retry_after  apenas 1 consulta e nenhuma repetição automática
+PASS  v14:primeiro_429_sem_retry_after  pausa persistida conforme Retry-After/60 min
+PASS  v14:primeiro_429_sem_retry_after  após recarregar: pausa ativa e Iniciar desabilitado
+PASS  v14:primeiro_429_sem_retry_after  aviso de HTTP 429 exibido
+PASS  v14:primeiro_429_sem_retry_after  linha marcada com falha de acesso 429 (não como e-mail ausente)
 PASS  v14:tres_indisponiveis  nenhuma chamada a /users/{id}/info/
 PASS  v14:tres_indisponiveis  nenhum host externo não simulado
 PASS  v14:tres_indisponiveis  intervalo >= 10 s entre consultas de perfil
@@ -165,9 +215,7 @@ PASS  v14:tres_indisponiveis  pausa após 3 indisponíveis seguidos
 PASS  v14:tres_indisponiveis  Continue retoma e segue para o próximo perfil
 PASS  v14:tres_indisponiveis  indisponíveis não são consultados de novo
 
-39/39 verificações OK
-
-4) Linha de base PATCHED 13 (mesmo harness, para comparar):
+4) LINHA DE BASE PATCHED 13 (mesmo harness):
 PASS  v13:tipos_mistos  não inicia sozinho
 PASS  v13:tipos_mistos  nenhuma chamada a /users/{id}/info/
 PASS  v13:tipos_mistos  nenhum host externo não simulado
@@ -190,5 +238,3 @@ PASS  v13:primeiro_429  apenas 1 consulta e nenhuma repetição automática
 PASS  v13:primeiro_429  pausa persistida conforme Retry-After/60 min
 PASS  v13:primeiro_429  após recarregar: pausa ativa e Iniciar desabilitado
 PASS  v13:primeiro_429  aviso de HTTP 429 exibido
-
-22/22 verificações OK

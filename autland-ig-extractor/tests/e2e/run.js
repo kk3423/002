@@ -19,6 +19,7 @@ const F = {
   businessHidden: (u, pk, email) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, business_email: email, should_show_public_contacts: false }),
   businessEmpty: (u, pk) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, business_email: '', should_show_public_contacts: true }),
   businessOmitted: (u, pk) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, biography: 'email na bio: bio@empresa.com' }),
+  businessWithheld: (u, pk) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, should_show_public_contacts: true, business_contact_method: 'CALL', business_email: null, business_phone_number: null, business_address_json: '{"city_name": "Sao Paulo"}', biography: 'orçamentos: bio@loja.com' }),
   creatorOmitted: (u, pk) => () => userBody(u, pk, { is_business_account: false, is_professional_account: true }),
   userNull: () => () => ({ status: 200, body: { data: { user: null }, status: 'ok' } }),
   rate429: (retryAfter) => () => ({ status: 429, headers: retryAfter ? { 'retry-after': String(retryAfter) } : {}, body: { message: 'Please wait a few minutes before you try again.', status: 'fail' } }),
@@ -95,8 +96,9 @@ const SCENARIOS = {
     const s = await H.waitFor(o.page, (x) => x.rows.length === 7 && settled(x) && x.rows.every((r) => r.detailLoaded) || (x.rows.length && x.isPaused && !x.detailCycle && profileReqs(o.log).length > 0 && Date.now() - profileReqs(o.log).slice(-1)[0].t > 25000), { timeout: 200000, every: 2000 });
     const csvEmail = s.emailList.length ? await H.exportCsv(o.page, 'email') : '';
     const csvAll = await H.exportCsv(o.page, 'all');
+    const xlsx = await H.exportXlsxSheets(o.page, 'all');
     await o.ctx.close();
-    return { scn, s, log: o.log, csvEmail, csvAll, errors: o.consoleErrors };
+    return { scn, s, log: o.log, csvEmail, csvAll, xlsx, errors: o.consoleErrors };
   },
   async primeiro_429(extDir, label, retryAfter) {
     const scn = label + ':primeiro_429' + (retryAfter ? '' : '_sem_retry_after');
@@ -136,7 +138,7 @@ const SCENARIOS = {
     const reqsBefore = profileReqs(o.log).length;
     const continueClicked = await H.clickButton(o.page, 'Continue').catch(() => false);
     await o.page.waitForTimeout(4000);
-    const toasts = await o.page.locator('.toast').allInnerTexts().catch(() => []);
+    const toasts = (await H.snapshot(o.page)).toasts;
     const reqsAfterContinue = profileReqs(o.log).length;
     await o.page.reload();
     await o.page.waitForTimeout(4000);
@@ -168,6 +170,22 @@ const SCENARIOS = {
     await o.ctx.close();
     return { scn, s, log: o.log, errors: o.consoleErrors, kind };
   },
+  async retido_pela_web(extDir, label) {
+    const scn = label + ':retido_pela_web';
+    const comments = [{ pk: 81, username: 'pessoal_r' }, { pk: 82, username: 'loja_r1' }, { pk: 83, username: 'loja_r2' }, { pk: 84, username: 'loja_r3' }, { pk: 85, username: 'loja_r4' }];
+    const profiles = { pessoal_r: F.personalOmitted('pessoal_r', 81), loja_r1: F.businessWithheld('loja_r1', 82), loja_r2: F.businessWithheld('loja_r2', 83), loja_r3: F.businessWithheld('loja_r3', 84), loja_r4: F.businessWithheld('loja_r4', 85) };
+    const o = await open(extDir, 'ret', { comments, profiles });
+    await H.clickButton(o.page, 'Iniciar');
+    const s = await H.waitFor(o.page, (x) => x.rows.length === 5 && x.isPaused && !x.detailCycle && profileReqs(o.log).length >= 4 && Date.now() - profileReqs(o.log).slice(-1)[0].t > 25000, { timeout: 160000, every: 2000 });
+    const xlsx = await H.exportXlsxSheets(o.page, 'all');
+    await o.page.reload();
+    await o.page.waitForTimeout(4000);
+    const afterReload = await H.snapshot(o.page);
+    const startEnabledAfterReload = await o.page.locator('button', { hasText: 'Iniciar' }).first().isEnabled().catch(() => null);
+    await o.page.waitForTimeout(6000);
+    await o.ctx.close();
+    return { scn, s, xlsx, afterReload, startEnabledAfterReload, log: o.log, errors: o.consoleErrors };
+  },
   async verificacao_429(extDir, label) {
     const scn = label + ':verificacao_429';
     const comments = [{ pk: 61, username: 'fila_a' }];
@@ -177,6 +195,7 @@ const SCENARIOS = {
     await H.clickButton(o.page, 'Verificar 1 perfil');
     let s = await H.waitFor(o.page, (x) => profileReqs(o.log).length >= 1 && !/Consultando/.test(x.bodyText) && x.retryAfterUntil, { timeout: 40000 });
     const probeDisabled = await o.page.locator('button', { hasText: 'Verificar 1 perfil' }).first().isDisabled();
+    void s;
     const startDisabled = await o.page.locator('button', { hasText: 'Iniciar' }).first().isDisabled();
     await o.page.waitForTimeout(15000);
     s = await H.snapshot(o.page);
@@ -197,6 +216,73 @@ const SCENARIOS = {
     const s = await H.waitFor(o.page, (x) => x.rows.length === 4 && x.rows.every((r) => r.detailLoaded), { timeout: 60000 });
     await o.ctx.close();
     return { scn, s, paused, reqsWhilePaused, resumed, log: o.log, errors: o.consoleErrors };
+  },
+  async pausa_compartilhada(extDir, label) {
+    // Outro dashboard salva a pausa: Iniciar não pode disparar nenhuma consulta.
+    const scn = label + ':pausa_compartilhada';
+    const comments = [{ pk: 91, username: 'loja_p' }];
+    const profiles = { loja_p: F.businessFound('loja_p', 91, 'p@loja.com') };
+    const o = await open(extDir, 'shr', { comments, profiles });
+    const until = Date.now() + 3600000;
+    await o.page.evaluate((u) => chrome.storage.local.set({ ig_contact_cooldown_until: u }), until);
+    const clicked = await H.clickButton(o.page, 'Iniciar');
+    await o.page.waitForTimeout(12000);
+    const s = await H.snapshot(o.page);
+    await o.ctx.close();
+    return { scn, s, clicked, toasts: s.toasts, until, log: o.log, errors: o.consoleErrors };
+  },
+  async lista_sem_retry(extDir, label) {
+    // 403 na leitura dos comentários: pausa sem repetição automática.
+    const scn = label + ':lista_sem_retry';
+    const o = await open(extDir, 'lst', { comments: [], profiles: {}, commentsStatus: 403 });
+    await H.clickButton(o.page, 'Iniciar');
+    const s = await H.waitFor(o.page, (x) => x.isPaused && /recusou a leitura dos comentários/.test(x.bodyText), { timeout: 60000 });
+    const firstCalls = o.log.filter((e) => e.kind === 'comments').length;
+    await o.page.waitForTimeout(45000);
+    const afterCalls = o.log.filter((e) => e.kind === 'comments').length;
+    await o.ctx.close();
+    return { scn, s, firstCalls, afterCalls, log: o.log, errors: o.consoleErrors };
+  },
+  async prova_persistente(extDir, label) {
+    // A prova real sobrevive a 20 respostas posteriores e à recarga.
+    const scn = label + ':prova_persistente';
+    const comments = [{ pk: 101, username: 'loja_prova' }, { pk: 102, username: 'pessoal_a' }, { pk: 103, username: 'pessoal_b' }];
+    const profiles = {
+      loja_prova: F.businessFound('loja_prova', 101, 'prova@loja.com.br'),
+      pessoal_a: F.personalOmitted('pessoal_a', 102), pessoal_b: F.personalOmitted('pessoal_b', 103),
+    };
+    const o = await open(extDir, 'prv', { comments, profiles });
+    await H.clickButton(o.page, 'Iniciar');
+    const s = await H.waitFor(o.page, (x) => x.rows.length === 3 && x.rows.every((r) => r.detailLoaded), { timeout: 120000, every: 2000 });
+    // sobrescreve o log rolante com 20 entradas posteriores, mantendo o schema
+    await o.page.evaluate(async (key) => {
+      const now = Date.now();
+      const list = Array.from({ length: 20 }, (_, i) => ({ at: now + i, endpoint: 'instagram_web_profile_info', username: 'posterior' + i, outcome: 'omitted', http: 200 }));
+      await chrome.storage.local.set({ [key]: list });
+    }, 'ig_commercial_contact_evidence_v14');
+    await o.page.reload();
+    await o.page.waitForTimeout(4000);
+    const afterReload = await H.snapshot(o.page);
+    const diag = await o.page.locator('textarea').first().inputValue().catch(() => '');
+    await o.ctx.close();
+    return { scn, s, afterReload, diag, log: o.log, errors: o.consoleErrors };
+  },
+  async export_vazio(extDir, label) {
+    // Exportar antes de qualquer consulta: diagnóstico vazio não pode quebrar.
+    const scn = label + ':export_vazio';
+    const comments = [{ pk: 111, username: 'loja_e' }, { pk: 112, username: 'pessoa_e' }];
+    const profiles = { loja_e: F.businessFound('loja_e', 111, 'e@loja.com'), pessoa_e: F.personalOmitted('pessoa_e', 112) };
+    const o = await open(extDir, 'exp', { comments, profiles });
+    await H.clickButton(o.page, 'Iniciar');
+    // Linhas já carregadas, mas nenhuma consulta de perfil concluída ainda.
+    const s = await H.waitFor(o.page, (x) => x.rows.length === 2, { timeout: 90000, every: 500 });
+    await H.clickButton(o.page, 'Pause').catch(() => false);
+    await o.page.waitForTimeout(1000);
+    const xlsx = await H.exportXlsxSheets(o.page, 'all');
+    const csv = await H.exportCsv(o.page, 'all');
+    const after = await H.snapshot(o.page);
+    await o.ctx.close();
+    return { scn, s, xlsx, csv, after, log: o.log, errors: o.consoleErrors };
   },
   async identidade(extDir, label) {
     const scn = label + ':identidade';
@@ -226,12 +312,23 @@ function assess(label, r) {
     check(scn, 'cada perfil consultado uma única vez', profileReqs(log).every((e) => e.n === 1));
     check(scn, 'único e-mail = campo comercial (bio ignorada)', JSON.stringify(s.emailList) === JSON.stringify(['contato@lojaexemplo.com.br']), s.emailList);
     check(scn, 'e-mail oculto não coletado', !s.rows.some((x) => x.email === 'oculto@empresa.com'));
-    check(scn, 'textos distintos: vazio/oculto/omitido/pessoal', new Set(s.rows.map((x) => x.text)).size >= 5, s.rows.map((x) => x.text));
+    check(scn, 'textos distintos: vazio/oculto/pessoal/indisponível/encontrado', new Set(s.rows.map((x) => x.text)).size >= 5, s.rows.map((x) => x.text));
+    check(scn, 'sem método de contato anunciado, nada é rotulado como retido', !s.rows.some((x) => x.status === 'not_delivered'));
     check(scn, 'perfil apagado preserva nome do comentário', byUser.conta_apagada && byUser.conta_apagada.user === 'conta_apagada');
     const emailCol = (csv) => { const rows = parseCsv(csv); const i = rows[0].indexOf('E-mail comercial'); return rows.slice(1).map((x) => x[i]).filter((v) => v !== undefined); };
     check(scn, 'CSV de e-mails: coluna "E-mail comercial" só com o contato comercial', JSON.stringify(emailCol(r.csvEmail)) === JSON.stringify(['contato@lojaexemplo.com.br']), emailCol(r.csvEmail));
     check(scn, 'CSV completo: coluna de e-mail sem bio/oculto/pessoal', emailCol(r.csvAll).filter(Boolean).join() === 'contato@lojaexemplo.com.br', emailCol(r.csvAll));
-    check(scn, 'CSV completo tem 7 linhas e coluna de status', r.csvAll.trim().split('\n').length === 8 && /Status do e-mail/.test(r.csvAll) && /Contato oculto/.test(r.csvAll) && /Campo comercial vazio/.test(r.csvAll), r.csvAll.split('\n').slice(0, 3));
+    check(scn, 'CSV completo tem 7 linhas e coluna de status', r.csvAll.trim().split('\n').length === 8 && /Status do e-mail/.test(r.csvAll) && /Contato oculto/.test(r.csvAll) && /Campo comercial vazio/.test(r.csvAll) && !/não entregue pela consulta web/.test(r.csvAll), r.csvAll.split('\n').slice(0, 3));
+    const sheets = r.xlsx || {};
+    const diag = sheets['Diagnostico contato'] || [];
+    const hdr = diag[0] || [];
+    const rowOf = (u) => diag.find((x) => x[0] === '@' + u) || [];
+    const col = (name) => hdr.indexOf(name);
+    check(scn, 'XLSX: aba de dados + 2 abas de diagnóstico automáticas', Object.keys(sheets).length === 3 && sheets['Respostas reais'] && diag.length === 8, Object.keys(sheets));
+    check(scn, 'XLSX diagnóstico: campo omitido x nulo x vazio por perfil', rowOf('pessoal_sem_campo')[col('business_email')] === 'absent' && rowOf('criador_nulo')[col('business_email')] === 'null' && rowOf('loja_vazia')[col('business_email')] === 'empty' && rowOf('loja_com_email')[col('business_email')] === 'valid', { hdr, sample: diag.slice(1, 4) });
+    check(scn, 'XLSX diagnóstico: sinal de contato oculto registrado', rowOf('loja_oculta')[col('should_show_public_contacts')] === 'false' && /oculto/i.test(rowOf('loja_oculta')[col('Status do e-mail')]));
+    check(scn, 'XLSX diagnóstico: sem e-mail completo nas abas de diagnóstico', !JSON.stringify([diag, sheets['Respostas reais']]).includes('contato@lojaexemplo.com.br'));
+    check(scn, 'XLSX dados: coluna E-mail comercial só com o contato do campo', (() => { const d = sheets.all || []; const i = (d[0] || []).indexOf('E-mail comercial'); return d.slice(1).map((x) => x[i]).filter(Boolean).join() === 'contato@lojaexemplo.com.br'; })());
     check(scn, 'histórico local salvo (extract_list_*)', Object.keys(s.storage).some((k) => /^extract_list_/.test(k) && Array.isArray(s.storage[k]) && s.storage[k].length === 7));
     check(scn, 'evidência sanitizada registrada (sem e-mail completo)', Array.isArray(s.storage.ig_commercial_contact_evidence_v14) && s.storage.ig_commercial_contact_evidence_v14.length === 7 && !JSON.stringify(s.storage.ig_commercial_contact_evidence_v14).includes('contato@lojaexemplo.com.br'));
   }
@@ -251,7 +348,7 @@ function assess(label, r) {
     check(scn, 'status: pessoal / omitido x3', byUser.pessoal_x.status === 'not_professional' && ['loja_om1', 'loja_om2', 'criador_om'].every((u) => byUser[u].status === 'omitted'));
     check(scn, 'e-mail da bio não usado', !s.rows.some((x) => x.email));
     check(scn, 'decisão persistida após recarga', r.afterReload.commercialContactUnavailable === true && r.startEnabledAfterReload === false);
-    check(scn, 'Continue bloqueado explica o motivo e não consulta', r.continueClicked && r.toasts.some((t) => /Fila bloqueada/.test(t)) && r.reqsAfterContinue === r.reqsBefore, { toasts: r.toasts, before: r.reqsBefore, after: r.reqsAfterContinue });
+    check(scn, 'Continue bloqueado explica o motivo e não consulta', r.continueClicked && r.toasts.some((t) => /Fila encerrada pelo diagnóstico automático/.test(t)) && r.reqsAfterContinue === r.reqsBefore, { toasts: r.toasts, before: r.reqsBefore, after: r.reqsAfterContinue });
     check(scn, 'verificação manual de 1 perfil executou 1 consulta', profileReqs(log).filter((e) => e.username === 'controle_loja').length === 1);
     check(scn, 'campo presente na verificação reabre a fila', r.probe && r.probe.commercialContactUnavailable === false && r.startEnabledAfterProbe === true);
     check(scn, 'diagnóstico mostra HTTP 200, campo e tipo', /HTTP 200/.test(r.diag) && /business_email=valid/.test(r.diag) && /business/.test(r.diag), r.diag.slice(0, 400));
@@ -262,6 +359,46 @@ function assess(label, r) {
     check(scn, 'parou após 1 consulta, sem repetição automática', profileReqs(log).length === 1 && s.isPaused, profileReqs(log).length);
     check(scn, `linha marcada com falha (${code})`, s.rows[0] && s.rows[0].failure && s.rows[0].failure.code === code && !s.rows[0].detailLoaded, s.rows[0] && s.rows[0].failure);
     check(scn, 'próximo perfil não consultado', !profileReqs(log).some((e) => e.username === 'perfil_seguinte'));
+  }
+  if (/export_vazio/.test(scn)) {
+    check(scn, 'linhas carregadas sem nenhuma consulta de perfil concluída', s.rows.length === 2 && s.rows.every((x) => !x.detailLoaded), s.rows.map((x) => x.detailLoaded));
+    const sheets = Object.keys(r.xlsx || {});
+    check(scn, 'XLSX com as 3 abas mesmo sem diagnóstico', sheets.length === 3 && sheets.includes('Diagnostico contato') && sheets.includes('Respostas reais'), sheets);
+    const diag = r.xlsx['Diagnostico contato'] || [];
+    check(scn, 'aba de diagnóstico lista os 2 perfis com "-" nos campos', diag.length === 3 && diag[1][0] === '@loja_e' && diag[1].filter((v) => v === '-').length >= 6, diag.slice(0, 2));
+    check(scn, 'status mostra aguardando consulta', diag[1][1] === 'Aguardando consulta', diag[1]);
+    check(scn, 'aba de respostas reais diz que não há prova', JSON.stringify(r.xlsx['Respostas reais']).includes('NÃO comprovado'));
+    check(scn, 'CSV exporta as 2 linhas', r.csv.trim().split('\n').length === 3, r.csv.slice(0, 200));
+    check(scn, 'sem erro de página após exportar', r.after && !r.errors.length, r.errors.slice(0, 2));
+  }
+  if (/pausa_compartilhada/.test(scn)) {
+    check(scn, 'nenhuma consulta de perfil durante a pausa de outro dashboard', profileReqs(log).length === 0, profileReqs(log).length);
+    check(scn, 'nenhuma leitura de comentários durante a pausa', log.filter((e) => e.kind === 'comments').length === 0);
+    check(scn, 'aviso explica a pausa salva', r.toasts.some((t) => /pausada até|limite do Instagram/.test(t)), r.toasts);
+    check(scn, 'pausa salva preservada e refletida na tela', Number(s.storage.ig_contact_cooldown_until) === r.until && s.isPaused);
+  }
+  if (/lista_sem_retry/.test(scn)) {
+    check(scn, '403 na lista pausa sem repetição automática', r.firstCalls === 1 && r.afterCalls === 1, { first: r.firstCalls, after: r.afterCalls });
+    check(scn, 'mensagem em português explica a pausa', /recusou a leitura dos comentários/.test(s.bodyText) && /sem nova tentativa automática/.test(s.bodyText));
+    check(scn, 'nenhuma consulta de perfil disparada', profileReqs(log).length === 0);
+  }
+  if (/prova_persistente/.test(scn)) {
+    check(scn, 'prova real registrada no schema', s.storage.ig_commercial_contact_schema_v14 && s.storage.ig_commercial_contact_schema_v14.firstFound && s.storage.ig_commercial_contact_schema_v14.firstFound.username === 'loja_prova');
+    check(scn, 'e-mail da prova fica mascarado no schema', s.storage.ig_commercial_contact_schema_v14.firstFound.email === 'p***@loja.com.br');
+    check(scn, 'prova sobrevive ao log rolante e à recarga', /Contato comercial público já recebido numa resposta real: @loja_prova/.test(r.afterReload.bodyText), r.afterReload.bodyText.slice(0, 400));
+    check(scn, 'diagnóstico confirma a prova após recarga', /resposta real: SIM — @loja_prova/.test(r.diag), r.diag.slice(0, 300));
+    check(scn, 'fila concluída (não ficou em laço)', s.isComplete === true);
+  }
+  if (/retido_pela_web/.test(scn)) {
+    const users = profileReqs(log).map((e) => e.username);
+    check(scn, 'encerra no 3º comercial com contato retido; pessoal não conta', users.join() === 'pessoal_r,loja_r1,loja_r2,loja_r3', users);
+    check(scn, 'status "não entregue pela consulta web" nos retidos', ['loja_r1', 'loja_r2', 'loja_r3'].every((u) => byUser[u].status === 'not_delivered'));
+    check(scn, 'e-mail da bio não usado', !s.rows.some((x) => x.email));
+    check(scn, 'aviso automático explica a retenção', s.notifications.some((n) => /retém esse contato|retém o contato/.test(n)), s.notifications);
+    check(scn, 'decisão persiste após recarga (Iniciar desabilitado)', r.afterReload.commercialContactUnavailable === true && r.startEnabledAfterReload === false && /retém o contato/.test(r.afterReload.bodyText));
+    const lines = JSON.stringify(r.xlsx['Respostas reais'] || []);
+    check(scn, 'XLSX traz decisão e retenção no diagnóstico', /contato retido pela consulta web/.test(lines) && /loja_r3/.test(lines), lines.slice(0, 300));
+    check(scn, 'nenhuma consulta após o encerramento (inclusive após recarregar)', profileReqs(log).length === 4);
   }
   if (/verificacao_429/.test(scn)) {
     const until = Number(s.storage.ig_contact_cooldown_until) || 0, reqAt = profileReqs(log)[0] ? profileReqs(log)[0].t : 0;
