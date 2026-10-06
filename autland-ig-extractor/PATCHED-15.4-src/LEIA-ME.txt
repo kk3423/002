@@ -1,0 +1,85 @@
+Autland IG Extractor — PATCHED 15.4 — E-mail comercial via /users/{id}/info/
+
+SITUAÇÃO (leia antes de instalar)
+- Implementação concluída, mas NÃO validada em resposta real do Instagram.
+  O ambiente onde esta versão foi feita não acessa o instagram.com nem a sua
+  sessão. Todos os testes usam respostas simuladas (as formas vêm de capturas
+  públicas reais, anonimizadas). Falta uma única validação real, que a própria
+  extensão mostra na tela (veja "VALIDAÇÃO REAL" abaixo).
+- Os seus 3 testes reais anteriores (15, 15.1 e 15.2) receberam HTTP 429 na
+  1ª consulta de perfil. A 15.4 não promete vencer o 429: ela respeita o
+  limite e evita consultas desnecessárias.
+
+POR QUE A 15.3 NÃO TRAZIA O E-MAIL
+O modo Comment perguntava web_profile_info. Essa consulta entrega o e-mail em
+data.user.business_email, que veio nulo em todas as respostas reais de
+terceiros guardadas. O e-mail vem de outra consulta, que os outros modos da
+extensão já usam: GET /api/v1/users/{id}/info/, campo user.public_email.
+Autorizado por você, o modo Comment passou a usar essa consulta.
+
+O QUE MUDOU NA 15.4
+1. Mesma função dos outros modos. O Comment chama /users/{id}/info/ pela
+   mesma função (mesma URL, mesmos cabeçalhos da sua sessão, mesmas
+   credenciais) que Seguidores, Seguindo, Curtidas, Hashtag, Local e Lista.
+   Não existe segunda implementação. A web_profile_info saiu do fluxo.
+2. Uma consulta por perfil, direto do comentário: comentário -> user_id ->
+   /users/{id}/info/. Sem a consulta anterior por @nome (metade das consultas).
+3. E-mail só do campo público do Instagram: public_email; business_email só se
+   vier preenchido. Nunca bio, legenda, comentário, site, login ou
+   recuperação. CALL/TEXT não prova que existe botão de e-mail.
+4. Cada perfil termina em um só estado:
+   E-mail comercial encontrado .......... o Instagram devolveu o e-mail
+   Perfil não disponibiliza e-mail público  HTTP 200 sem e-mail (vazio, oculto,
+                                            conta pessoal, campo ausente)
+   Aguardando consulta .................. ainda não consultado
+   Consulta pausada pelo Instagram ...... HTTP 429
+   Sessão precisa ser verificada ........ login, desafio ou página de login
+   Acesso negado pelo Instagram ......... HTTP 403
+   Falha temporária na consulta ......... rede, erro 5xx ou resposta inválida
+   Perfil indisponível .................. conta apagada (HTTP 404)
+   Só HTTP 200 com o perfil real vira "sem e-mail". 429, 403, rede e resposta
+   inválida nunca viram "sem e-mail" e não são salvos como resultado.
+5. Perfil sem e-mail, CALL/TEXT ou várias respostas vazias seguidas NÃO param
+   a fila. Só falha de acesso pausa.
+6. Fila persistente. A lista de comentaristas é lida e salva inteira (sem
+   duplicar por user_id) antes da 1ª consulta de e-mail, junto com o cursor da
+   lista. Ao fechar ou atualizar a extensão e retomar, a fila continua do
+   ponto salvo: sem reler páginas e sem repetir perfis já consultados.
+7. Cache por user_id (14 dias com e-mail, 7 sem e-mail, 3 para perfil
+   indisponível). Um perfil já consultado não é consultado de novo, nem em
+   outra extração. Linhas do cache não esperam o intervalo.
+8. Ritmo conservador e adaptativo: 15 a 30 s entre perfis (o mesmo padrão dos
+   outros modos; o seu intervalo salvo vale), 1 consulta por vez entre todas
+   as abas. Cada 429 dobra o intervalo (até 2 min); 5 respostas seguidas
+   reduzem 20%.
+9. Validação inicial. A 1ª resposta real de cada execução abre um quadro:
+   endpoint, HTTP, horário, tipo de public_email, caminho do campo,
+   Retry-After e decisão do parser. O botão "Validar 1 perfil pendente" faz 1
+   única consulta, mostra o mesmo quadro e deixa a resposta salva para a fila.
+   Se vier 429, nenhuma outra consulta acontece. Cookies, tokens, cabeçalhos
+   e o e-mail completo nunca aparecem (só o e-mail mascarado).
+
+PRESERVADO
+- HTTP 429: pausa imediata no 1º 429, Retry-After respeitado, 60 minutos quando
+  não vem, pausa salva e compartilhada entre abas, nenhuma consulta durante
+  a pausa, nenhuma repetição automática. A pausa salva da 15.3 vale na 15.4.
+- Sem proxy, troca de IP, rotação de conta, cliente móvel falso, cookies
+  copiados ou token externo. Só a sessão normal da extensão.
+- Chave do manifesto, ID da extensão, permissões e os outros modos.
+
+ATUALIZAÇÃO (sem remover a extensão e sem apagar o armazenamento)
+1. Feche os dashboards abertos e extraia o ZIP inteiro.
+2. Copie TODOS os arquivos para a pasta da extensão já instalada,
+   substituindo os correspondentes.
+3. Em chrome://extensions, clique em Recarregar na Autland IG Extractor.
+   Não remova a extensão: isso apagaria o histórico, a fila e a pausa salva.
+4. Abra o modo Comment. O cabeçalho deve mostrar
+   "PATCHED 15.4 · E-mail comercial via /users/{id}/info/".
+5. Se houver pausa de 429 salva, aguarde o horário mostrado na tela.
+
+VALIDAÇÃO REAL (um clique)
+1. No modo Comment, clique em Iniciar. A lista é lida e salva.
+2. A 1ª consulta de e-mail sai e mostra o quadro da validação. Se vier
+   "email_found" com "public_email: texto", o e-mail está sendo coletado e
+   a fila segue sozinha. Se vier "no_public_email" para um perfil que no app
+   mostra Contato -> E-mail, envie o print do quadro.

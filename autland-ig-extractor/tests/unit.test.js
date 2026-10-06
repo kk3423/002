@@ -1,4 +1,4 @@
-/* Unit tests for the PATCHED 14-15.3 parser and reader. All responses are SIMULATED. */
+/* Unit tests for the PATCHED 14-15.4 parser and reader. All responses are SIMULATED (anonymised real shapes). */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
@@ -6,6 +6,7 @@ const EXT = process.env.EXT_DIR;
 const P = require(path.join(EXT, 'public-contact-parser.js'));
 const R = require(path.join(EXT, 'commercial-profile-reader.js'));
 const P13 = require(path.join(process.env.ORIG_DIR, 'public-contact-parser.js'));
+const fixture = (name) => JSON.parse(require('fs').readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
 
 const biz = (extra) => Object.assign({ id: '1', username: 'loja', is_business_account: true, is_professional_account: true }, extra);
 
@@ -34,7 +35,7 @@ test('parser: e-mail nulo é "vazio" mesmo com botão CALL/TEXT (sem inferência
   for (const v of [null, '']) {
     for (const method of ['CALL', 'TEXT', 'UNKNOWN', undefined]) {
       const c = P.classifyEmail(biz({ business_email: v, business_phone_number: null, business_contact_method: method, should_show_public_contacts: true }));
-      assert.equal(c.status, 'empty', String(v) + '/' + method); assert.equal(c.email, ''); assert.equal(c.withheld, false);
+      assert.equal(c.status, 'empty', String(v) + '/' + method); assert.equal(c.email, '');
     }
   }
   // API móvel (public_email) vazia também é "empty".
@@ -48,8 +49,8 @@ test('parser: nenhuma combinação de flags marca contato retido', () => {
     biz({ business_email: null, business_phone_number: null, business_contact_method: 'CALL', should_show_public_contacts: false }),
   ];
   for (const u of combos) {
-    assert.equal(P.classifyEmail(u).withheld, false, JSON.stringify(u));
-    assert.equal(P.extract(u).contactWithheld, false);
+    assert.ok(!('withheld' in P.classifyEmail(u)), JSON.stringify(u));
+    assert.ok(!('contactWithheld' in P.extract(u)));
     assert.notEqual(P.classifyEmail(u).status, 'not_delivered');
   }
 });
@@ -98,18 +99,76 @@ test('parser: telefone idêntico ao PATCHED 13 (sem regressão)', () => {
     assert.equal(a.phone, b.phone, JSON.stringify(f)); assert.equal(a.phoneSource, b.phoneSource);
   }
 });
-test('parser: textos de status distintos e falhas de acesso', () => {
+test('parser: textos pedidos para cada estado e para cada falha de acesso', () => {
   const t = (row) => P.emailStatusText(Object.assign({ loaded: true, detailLoaded: true }, row));
-  const texts = ['empty', 'hidden', 'omitted', 'not_professional', 'profile_unavailable', 'identity_mismatch', 'invalid'].map((s) => t({ emailStatus: s }));
-  assert.equal(new Set(texts).size, texts.length);
-  // Linhas salvas pela 14-15.2 como "não entregue" passam a mostrar o que a resposta trouxe: campo vazio.
-  assert.equal(t({ emailStatus: 'not_delivered' }), t({ emailStatus: 'empty' }));
-  assert.ok(!Object.values(P.statusText).some((v) => /não entregue|retid/i.test(v)));
-  assert.equal(t({ email: 'a@b.com', emailSource: 'business_email', contactParserVersion: 14 }), 'Contato público do Instagram');
-  assert.match(P.emailStatusText({ loaded: true, detailLoaded: false, contactFailure: { code: 'rate_limit', status: 429 } }), /429/);
-  assert.match(P.emailStatusText({ loaded: true, detailLoaded: false, contactFailure: { code: 'access', status: 403 } }), /403/);
+  assert.equal(t({ email: 'a@b.com', emailSource: 'public_email', contactParserVersion: 15 }), 'E-mail comercial encontrado');
+  for (const s of ['empty', 'hidden', 'omitted', 'not_professional', 'invalid']) assert.match(t({ emailStatus: s }), /^Perfil não disponibiliza e-mail público/, s);
+  assert.equal(new Set(['empty', 'hidden', 'omitted', 'not_professional', 'invalid'].map((s) => t({ emailStatus: s }))).size, 5, 'o detalhe distingue cada caso');
   assert.equal(P.emailStatusText({ loaded: true, detailLoaded: false }), 'Aguardando consulta');
-  assert.equal(t({ emailStatus: 'not_published' }), 'Sem e-mail comercial publicado');
+  assert.equal(P.emailStatusText({ loaded: false }), 'Aguardando consulta');
+  const fail = (code, status) => P.emailStatusText({ loaded: true, detailLoaded: false, contactFailure: { code, status } });
+  assert.equal(fail('rate_limit', 429), 'Consulta pausada pelo Instagram · HTTP 429');
+  assert.equal(fail('login_required', 200), 'Sessão precisa ser verificada · HTTP 200');
+  assert.equal(fail('login_required', 0), 'Sessão precisa ser verificada');
+  assert.equal(fail('access_denied', 403), 'Acesso negado pelo Instagram · HTTP 403');
+  assert.equal(fail('network', 0), 'Falha temporária na consulta');
+  assert.equal(fail('temporary', 503), 'Falha temporária na consulta · HTTP 503');
+  assert.equal(t({ emailStatus: 'profile_unavailable' }), 'Perfil indisponível');
+  assert.ok(!Object.values(P.statusText).concat(Object.values(P.stateText)).some((v) => /retid|não entregue/i.test(v)));
+  // Linhas salvas pela 14-15.2 como "não entregue" mostram o que a resposta trouxe: campo vazio.
+  assert.equal(t({ emailStatus: 'not_delivered' }), t({ emailStatus: 'empty' }));
+});
+test('parser: cada linha termina em um só estado (e falha nunca vira "sem e-mail")', () => {
+  const found = { loaded: true, detailLoaded: true, email: 'a@b.com', emailSource: 'public_email', contactParserVersion: 15 };
+  assert.equal(P.contactState(found), 'email_found');
+  assert.equal(P.contactState({ loaded: true, detailLoaded: true, emailStatus: 'empty' }), 'no_public_email');
+  for (const s of ['hidden', 'omitted', 'not_professional', 'invalid', 'not_published', 'not_returned']) assert.equal(P.contactState({ loaded: true, detailLoaded: true, emailStatus: s }), 'no_public_email', s);
+  assert.equal(P.contactState({ loaded: true, detailLoaded: false }), 'pending');
+  assert.equal(P.contactState({ loaded: false }), 'pending');
+  const byFailure = (code, status) => P.contactState({ loaded: true, detailLoaded: false, emailStatus: 'empty', contactFailure: { code, status } });
+  assert.equal(byFailure('rate_limit', 429), 'rate_limited');
+  assert.equal(byFailure('cooldown', null), 'rate_limited');
+  assert.equal(byFailure('login_required', 200), 'login_required');
+  assert.equal(byFailure('access', 401), 'login_required');
+  assert.equal(byFailure('access_denied', 403), 'access_denied');
+  assert.equal(byFailure('access', 403), 'access_denied');
+  for (const c of ['network', 'temporary', 'unexpected_response', 'request']) assert.equal(byFailure(c, 0), 'temporary_error', c);
+  assert.equal(P.contactState({ loaded: true, detailLoaded: true, emailStatus: 'profile_unavailable' }), 'profile_unavailable');
+  assert.equal(P.contactState({ loaded: true, detailLoaded: true, emailStatus: 'identity_mismatch' }), 'profile_unavailable');
+  // um e-mail que não veio do campo comercial não cria estado "encontrado"
+  assert.equal(P.contactState({ loaded: true, detailLoaded: true, email: 'bio@x.com', emailSource: 'biography' }), 'no_public_email');
+});
+test('parser: só os envelopes comprovados (user, data.user, items[0].user) e a identidade pelo id', () => {
+  const u = { pk: 77, username: 'x', public_email: 'a@b.com' };
+  for (const [wrapped, path] of [[{ user: u }, 'data.user'], [{ data: { user: u } }, 'data.data.user'], [{ items: [{ user: u }] }, 'data.items.0.user']]) {
+    const r = P.locateProfile({ data: wrapped }, '77', '');
+    assert.equal(r.known, true); assert.equal(r.path, path); assert.equal(r.user, u); assert.equal(r.mismatch, false);
+    assert.equal(P.profileFromResponse({ data: wrapped }, '77', ''), u);
+  }
+  // direto no corpo (sem o invólucro do axios)
+  assert.equal(P.locateProfile({ user: u }, '77', '').path, 'user');
+  assert.equal(P.locateProfile({ items: [{ user: u }] }, '77', '').path, 'items.0.user');
+  // outro id = divergência, nunca aplicado
+  const other = P.locateProfile({ data: { user: u } }, '78', '');
+  assert.equal(other.mismatch, true); assert.equal(P.profileFromResponse({ data: { user: u } }, '78', ''), null);
+  // user nulo = perfil ausente; formatos que a extensão não recebe = desconhecido
+  assert.deepEqual(P.locateProfile({ data: { user: null } }, '77', ''), { known: true, path: 'data.user', user: null, mismatch: false });
+  for (const bad of [{ data: { viewer: { user: u } } }, { data: { graphql: { user: u } } }, { data: { users: [u] } }, { data: { suggested: [{ user: u }] } }, { data: 'html' }, {}]) {
+    assert.equal(P.locateProfile(bad, '77', '').known, false, JSON.stringify(bad).slice(0, 40));
+    assert.equal(P.profileFromResponse(bad, '77', ''), null);
+  }
+});
+test('parser: formas reais anonimizadas — /users/{id}/info/ traz public_email; a rota web traz business_email nulo', () => {
+  const biz = P.locateProfile({ data: fixture('info-business.json') }, '1000000001', '');
+  const bizC = P.extract(biz.user);
+  assert.equal(bizC.emailStatus, 'found'); assert.equal(bizC.email, 'contato@exemplo.com.br'); assert.equal(bizC.emailSource, 'public_email');
+  assert.equal(bizC.profileType, 'business');
+  const cre = P.extract(P.locateProfile({ data: fixture('info-creator.json') }, '1000000001', '').user);
+  assert.equal(cre.emailStatus, 'found'); assert.equal(cre.profileType, 'creator');
+  const empty = P.extract(P.locateProfile({ data: fixture('info-business-empty.json') }, '1000000001', '').user);
+  assert.equal(empty.emailStatus, 'empty'); assert.equal(empty.email, '');
+  const web = P.extract(P.locateProfile({ data: fixture('web-business-null.json') }, '1000000001', '').user);
+  assert.equal(web.emailStatus, 'empty'); assert.equal(web.email, '', 'a rota web da 15.3 não entrega o e-mail');
 });
 test('parser: histórico — linhas antigas da bio são saneadas; linhas v13 válidas preservadas', () => {
   const bio = P.commercialRow({ email: 'bio@x.com', emailSource: 'biography' });
@@ -118,7 +177,7 @@ test('parser: histórico — linhas antigas da bio são saneadas; linhas v13 vá
   assert.equal(v13.email, 'c@x.com');
 });
 
-/* ---------- reader with simulated deps ---------- */
+/* ---------- reader with simulated deps: the shared profile-detail request is a stub ---------- */
 function deps(responses, opts = {}) {
   const store = Object.assign({}, opts.store || {});
   let clock = opts.now || 1_800_000_000_000;
@@ -140,19 +199,16 @@ function deps(responses, opts = {}) {
         l.locked = true;
         try { return await fn(); } finally { l.locked = false; const next = l.queue.shift(); if (next) next(); }
       } },
-      fetch: async (url, init) => {
+      // The extension's own profile-detail request, normalised to { status, headers, data }.
+      request: async (userId) => {
         active++; maxActive = Math.max(maxActive, active);
-        calls.push({ url, init, at: clock });
+        calls.push({ userId, at: clock });
         try {
           await new Promise((r) => setTimeout(r, 5));
           const next = responses.shift();
           if (!next) throw new Error('no response scripted');
           if (next.throw) throw next.throw;
-          return {
-            status: next.status || 200, ok: (next.status || 200) >= 200 && (next.status || 200) < 300, type: next.type || 'basic',
-            headers: { get: (h) => (next.headers || {})[h.toLowerCase()] || null },
-            text: async () => (typeof next.body === 'string' ? next.body : JSON.stringify(next.body)),
-          };
+          return { status: next.status || 200, headers: next.headers || {}, data: next.body };
         } finally { active--; }
       },
       now: () => clock,
@@ -160,260 +216,305 @@ function deps(responses, opts = {}) {
     },
   };
 }
-const ok = (user) => ({ status: 200, body: { data: { user }, status: 'ok' } });
+const person = (id, extra) => Object.assign({ pk: Number(id), pk_id: String(id), username: 'u' + id, full_name: 'U' + id, account_type: 2, is_business: true,
+  should_show_public_contacts: true, business_contact_method: 'CALL', business_email: null }, extra);
+const ok = (user, wrap) => ({ status: 200, body: wrap ? wrap(user) : { user, status: 'ok' } });
 const K = R;
+const DAY = 864e5;
 
-test('reader: requisição web normal (host, cabeçalhos, credenciais, sem seguir redirect)', async () => {
-  const x = deps([ok(biz({ username: 'loja', business_email: 'v@loja.com' }))]);
-  const read = R.create(x.d);
-  const r = await read('1', '@Loja', () => true);
-  assert.equal(x.calls.length, 1);
-  assert.equal(x.calls[0].url, 'https://www.instagram.com/api/v1/users/web_profile_info/?username=loja');
-  assert.equal(x.calls[0].init.headers['X-IG-App-ID'], '936619743392459');
-  assert.equal(x.calls[0].init.credentials, 'include');
-  assert.equal(x.calls[0].init.redirect, 'manual');
-  assert.ok(!/\/users\/\d+\/info\//.test(x.calls[0].url));
+test('leitor: não monta requisição própria — só pede a função compartilhada e não conhece web_profile_info', async () => {
+  const x = deps([ok(person('1', { public_email: 'v@loja.com' }))]);
+  assert.equal(x.d.fetch, undefined);
+  const r = await R.create(x.d)('1', 'loja', () => true);
+  assert.deepEqual(x.calls.map((c) => c.userId), ['1']);
   assert.equal(r.contactOutcome, 'found'); assert.equal(r.data.user.public_email, 'v@loja.com');
+  const src = require('fs').readFileSync(path.join(EXT, 'commercial-profile-reader.js'), 'utf8');
+  assert.ok(!/\bfetch\s*\(/.test(src), 'o leitor não chama fetch');
+  assert.ok(!/web_profile_info/.test(src), 'o leitor não conhece a rota web');
+  const dash = require('fs').readFileSync(path.join(EXT, 'dashboard.js'), 'utf8');
+  assert.ok(!/loadUserInfoDetailWebProfile/.test(dash), 'o Comment não tem mais um caminho próprio para o perfil');
+  assert.equal((dash.match(/users\/web_profile_info/g) || []).length, 3, 'a rota web só resta nas buscas por nome (alvo do perfil e lista de @perfis)');
 });
-test('reader: 429 com Retry-After numérico salva pausa e registra evidência', async () => {
-  const x = deps([{ status: 429, headers: { 'retry-after': '120' }, body: { status: 'fail' } }]);
+test('leitor: HTTP 200 com public_email preenchido (resposta real anonimizada) = e-mail encontrado, 1 consulta', async () => {
+  const x = deps([{ status: 200, body: fixture('info-business.json') }]);
+  const r = await R.create(x.d)('1000000001', 'perfil_exemplo', () => true);
+  assert.equal(r.contactOutcome, 'found'); assert.equal(r.publicContactResult.email, 'contato@exemplo.com.br');
+  assert.equal(r.publicContactResult.emailSource, 'public_email'); assert.equal(r.contactRoute, 'users_info');
+  assert.equal(x.calls.length, 1); assert.equal(x.calls[0].userId, '1000000001');
+  const ev = x.store[K.evidenceKey][0];
+  assert.equal(ev.http, 200); assert.equal(ev.endpoint, 'instagram_users_info'); assert.equal(ev.route, 'GET /api/v1/users/{id}/info/');
+  assert.equal(ev.state, 'email_found'); assert.equal(ev.decision, 'email_found (public_email)'); assert.equal(ev.emailField, 'user.public_email');
+  assert.equal(ev.path, 'user'); assert.equal(ev.email, 'c***@exemplo.com.br');
+  // a resposta real desta rota traz public_email e não traz business_email
+  assert.deepEqual(ev.keys, { public_email: 'valid', business_email: 'absent', business_phone_number: 'absent' });
+  assert.ok(ev.emailPaths.includes('user.public_email=texto'));
+  assert.ok(!JSON.stringify(x.store[K.evidenceKey]).includes('contato@exemplo.com.br'), 'nenhum e-mail completo no registro técnico');
+  assert.equal(x.store[K.schemaKey].firstFound.email, 'c***@exemplo.com.br');
+  const creator = deps([{ status: 200, body: fixture('info-creator.json') }]);
+  assert.equal((await R.create(creator.d)('1000000001', 'perfil_exemplo', null)).contactOutcome, 'found');
+});
+test('leitor: HTTP 200 com public_email vazio = perfil não disponibiliza e-mail público (sem parar a fila)', async () => {
+  const x = deps([{ status: 200, body: fixture('info-business-empty.json') }, ok(person('2', { public_email: 'v@loja.com' }))]);
   const read = R.create(x.d);
-  await assert.rejects(read('1', 'loja', () => true), (e) => e.stopCode === 'rate_limit' && e.response.status === 429);
+  const r = await read('1000000001', 'perfil_exemplo', null);
+  assert.equal(r.contactOutcome, 'empty'); assert.equal(r.publicContactResult.email, '');
+  assert.equal(P.contactState({ loaded: true, detailLoaded: true, emailStatus: r.contactOutcome }), 'no_public_email');
+  assert.equal((await read('2', 'u2', null)).contactOutcome, 'found', 'a fila segue');
+  assert.equal(x.store[K.evidenceKey][1].decision, 'no_public_email (empty)');
+});
+test('leitor: o usuário é achado em cada envelope suportado (user, data.user, items[0].user)', async () => {
+  const wraps = [[(u) => ({ user: u, status: 'ok' }), 'user'], [(u) => ({ data: { user: u }, status: 'ok' }), 'data.user'], [(u) => ({ items: [{ user: u }], status: 'ok' }), 'items[0].user']];
+  for (const [wrap, shown] of wraps) {
+    const x = deps([ok(person('7', { public_email: 'e@loja.com' }), wrap)]);
+    const r = await R.create(x.d)('7', 'u7', null);
+    assert.equal(r.contactOutcome, 'found', shown);
+    assert.equal(x.store[K.evidenceKey][0].path, shown); assert.equal(x.store[K.evidenceKey][0].emailField, shown + '.public_email');
+  }
+});
+test('leitor: envelope que a extensão não recebe = falha temporária, nunca "sem e-mail"', async () => {
+  const u = person('7', { public_email: 'e@loja.com' });
+  for (const body of [{ graphql: { user: u } }, { viewer: { user: u } }, { users: [u] }, { suggested: [{ user: u }] }, { status: 'ok' }]) {
+    const x = deps([{ status: 200, body }]);
+    await assert.rejects(R.create(x.d)('7', 'u7', null), (e) => e.stopCode === 'unexpected_response', JSON.stringify(body).slice(0, 30));
+    assert.equal(x.store[K.profileCacheKey], undefined);
+    assert.equal(x.store[K.evidenceKey][0].outcome, 'temporary_error');
+  }
+});
+test('leitor: prioridade do e-mail, contato oculto, CALL/TEXT e bio', async () => {
+  const run = async (extra) => { const x = deps([ok(person('1', extra))]); return R.create(x.d)('1', 'u1', null); };
+  let r = await run({ public_email: 'a@x.com', business_email: 'b@x.com' });
+  assert.equal(r.publicContactResult.email, 'a@x.com'); assert.equal(r.publicContactResult.emailSource, 'public_email');
+  r = await run({ public_email: '', business_email: 'b@x.com' });
+  assert.equal(r.publicContactResult.email, 'b@x.com'); assert.equal(r.publicContactResult.emailSource, 'business_email');
+  r = await run({ public_email: 'o@x.com', should_show_public_contacts: false });
+  assert.equal(r.contactOutcome, 'hidden'); assert.equal(r.publicContactResult.email, '');
+  for (const method of ['CALL', 'TEXT']) {
+    r = await run({ public_email: '', business_contact_method: method, biography: 'contato: bio@x.com | https://x.com/mailto:link@x.com', external_url: 'mailto:site@x.com' });
+    assert.equal(r.contactOutcome, 'empty', method); assert.equal(r.publicContactResult.email, '', 'a bio e o site nunca viram e-mail');
+  }
+  r = await run({ account_type: 1, is_business: false, public_email: 'p@x.com' });
+  assert.equal(r.contactOutcome, 'not_professional'); assert.equal(r.publicContactResult.email, '');
+});
+test('leitor: 429 com Retry-After numérico salva a pausa, registra e pára com 1 consulta', async () => {
+  const x = deps([{ status: 429, headers: { 'retry-after': '120' }, body: { status: 'fail' } }]);
+  await assert.rejects(R.create(x.d)('1', 'loja', () => true), (e) => e.stopCode === 'rate_limit' && e.response.status === 429 && e.cooldownUntil === x.d.now() + 120000);
   assert.equal(x.store[K.cooldownKey], x.d.now() + 120000);
   const ev = x.store[K.evidenceKey][0];
-  assert.equal(ev.http, 429); assert.equal(ev.retryAfter, '120'); assert.equal(ev.outcome, 'rate_limit');
+  assert.equal(ev.http, 429); assert.equal(ev.retryAfter, '120'); assert.equal(ev.outcome, 'rate_limited'); assert.equal(ev.cooldownSaved, true);
+  assert.equal(x.calls.length, 1);
 });
-test('reader: 429 sem Retry-After = 60 min; data HTTP respeitada', async () => {
+test('leitor: 429 sem Retry-After = 60 min; data HTTP e cabeçalho em maiúsculas respeitados', async () => {
   let x = deps([{ status: 429, body: {} }]);
   await assert.rejects(R.create(x.d)('1', 'loja', null), (e) => e.stopCode === 'rate_limit');
-  assert.equal(x.store[K.cooldownKey], x.d.now() + 3600000);
+  assert.equal(x.store[K.cooldownKey], x.d.now() + 3600000); assert.equal(x.store[K.evidenceKey][0].retryAfter, null);
   const when = new Date(1_800_000_000_000 + 7200000).toUTCString();
-  x = deps([{ status: 429, headers: { 'retry-after': when }, body: {} }]);
+  x = deps([{ status: 429, headers: { 'Retry-After': when }, body: {} }]);
   await assert.rejects(R.create(x.d)('1', 'loja', null));
   assert.equal(x.store[K.cooldownKey], Date.parse(when));
+  x = deps([{ status: 429, headers: { 'retry-after': '3' }, body: {} }]);
+  await assert.rejects(R.create(x.d)('1', 'loja', null));
+  assert.equal(x.store[K.cooldownKey], x.d.now() + 10000, 'mínimo de 10 s');
 });
-test('reader: pausa ativa impede qualquer consulta (inclusive verificação manual)', async () => {
-  const x = deps([], { store: { ig_contact_cooldown_until: 1_800_000_000_000 + 1000 } });
-  const read = R.create(x.d);
-  await assert.rejects(read('1', 'loja', null), (e) => e.stopCode === 'cooldown');
-  await assert.rejects(read('', 'loja', null, { probe: true }), (e) => e.stopCode === 'cooldown');
-  assert.equal(x.calls.length, 0);
-});
-test('reader: intervalo mínimo de 10 s entre consultas, serializadas', async () => {
-  const waits = [];
-  const x = deps([ok(biz({ id: '1', username: 'a' })), ok(biz({ id: '2', username: 'b' }))], { waits });
-  const read = R.create(x.d);
-  await Promise.all([read('1', 'a', null), read('2', 'b', null)]);
-  assert.equal(x.calls.length, 2); assert.equal(x.maxActive, 1);
-  assert.ok(x.calls[1].at - x.calls[0].at >= 10000, String(x.calls[1].at - x.calls[0].at));
-});
-test('reader: evidência sanitizada (campos, flags, e-mail mascarado)', async () => {
-  const x = deps([ok(biz({ username: 'loja', business_email: 'vendas@loja.com', should_show_public_contacts: true, business_contact_method: 'UNKNOWN' }))]);
-  await R.create(x.d)('1', 'loja', null);
-  const ev = x.store[K.evidenceKey][0];
-  assert.equal(ev.outcome, 'found'); assert.equal(ev.email, 'v***@loja.com'); assert.equal(ev.http, 200);
-  assert.deepEqual(ev.keys, { public_email: 'absent', business_email: 'valid', business_phone_number: 'absent' });
-  assert.equal(ev.flags.business_contact_method, 'UNKNOWN');
-  assert.ok(ev.userKeys.includes('business_email'));
-  // Diagnóstico nunca guarda o e-mail completo (o cache de perfis guarda o resultado, como o histórico).
-  assert.ok(!JSON.stringify([x.store[K.evidenceKey], x.store[K.schemaKey]]).includes('vendas@loja.com'));
-});
-test('reader: perfis sem e-mail (pessoais, omitidos, vazios, ocultos) nunca param a fila', async () => {
-  const users = [
-    { id: '1', username: 'p1', is_professional_account: false }, { id: '2', username: 'p2', is_professional_account: false },
-    biz({ id: '3', username: 'b1' }), biz({ id: '4', username: 'b2' }), biz({ id: '5', username: 'b3' }),
-    { id: '6', username: 'c1', is_professional_account: true, is_business_account: false },
-    biz({ id: '7', username: 'v1', business_email: null }), biz({ id: '8', username: 'v2', business_email: null, business_contact_method: 'CALL' }),
-    biz({ id: '9', username: 'h1', should_show_public_contacts: false }), biz({ id: '10', username: 'f1', business_email: 'f1@loja.com' }),
-  ];
-  const x = deps(users.map(ok));
-  const read = R.create(x.d);
-  const outcomes = [];
-  for (const u of users) {
-    const r = await read(u.id, u.username, null);
-    assert.equal(r.commercialSchemaUnsupported, false, u.username);
-    outcomes.push(r.contactOutcome);
+test('leitor: depois do 429, ZERO consultas adicionais (outro perfil, nova aba, validação manual)', async () => {
+  const x = deps([{ status: 429, headers: { 'retry-after': '600' }, body: {} }, ok(person('2')), ok(person('3')), ok(person('4'))]);
+  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'rate_limit');
+  const second = R.create(x.d);   // another dashboard, same browser storage
+  for (const [id, opts] of [['2', undefined], ['3', undefined], ['1', { probe: true }], ['4', { probe: true }]]) {
+    await assert.rejects(second(id, 'u' + id, null, opts), (e) => e.stopCode === 'cooldown' && e.cooldownUntil === x.store[K.cooldownKey], id);
   }
-  assert.deepEqual(outcomes, ['not_professional', 'not_professional', 'omitted', 'omitted', 'omitted', 'omitted', 'empty', 'empty', 'hidden', 'found']);
-  assert.equal(x.calls.length, users.length);
-  assert.equal(R.blockReason(x.store[K.schemaKey]), '');
-  assert.equal(R.unsupported(x.store[K.schemaKey]), false);
-});
-test('reader: contato oculto/sem campo não conta como consulta incompatível', async () => {
-  const x = deps([1, 2, 3, 4].map((i) => ok(biz({ id: String(i), username: 'h' + i, should_show_public_contacts: false }))));
-  const read = R.create(x.d);
-  for (const i of [1, 2, 3, 4]) assert.equal((await read(String(i), 'h' + i, null)).contactOutcome, 'hidden');
-  assert.equal(R.unsupported(x.store[K.schemaKey]), false);
-});
-test('reader: um perfil com o campo impede a parada por omissão', async () => {
-  const x = deps([ok(biz({ id: '1', username: 'b1', business_email: null })), ...[2, 3, 4, 5].map((i) => ok(biz({ id: String(i), username: 'b' + i })))]);
-  const read = R.create(x.d);
-  for (const i of [1, 2, 3, 4, 5]) assert.equal((await read(String(i), 'b' + i, null)).commercialSchemaUnsupported, false);
-});
-test('reader: parada por rota salva pela 14-15.2 não bloqueia mais a fila nem a verificação', async () => {
-  const blocked = { endpoint: 'instagram_web_profile_info', keysPresent: 3, found: 0, foundUsers: [], withheldProfessional: ['a', 'b', 'c'], omittedProfessional: ['d', 'e', 'f'], omittedOther: 0 };
-  const x = deps([ok(biz({ id: '9', username: 'fila', business_email: 'f@x.com' })), ok(biz({ username: 'controle', business_email: 'c@x.com' }))], { store: { [K.schemaKey]: blocked } });
-  const read = R.create(x.d);
-  assert.equal((await read('9', 'fila', null)).contactOutcome, 'found');
-  const r = await read('', 'controle', null, { probe: true });
-  assert.equal(r.contactOutcome, 'found'); assert.equal(r.commercialSchemaUnsupported, false);
+  assert.equal(x.calls.length, 1, 'só a consulta que recebeu o 429');
+  x.advance(601000);
+  assert.equal((await second('2', 'u2', null)).contactOutcome, 'empty', 'liberado só depois do horário');
   assert.equal(x.calls.length, 2);
-  assert.equal(x.store[K.evidenceKey][0].probe, true);
 });
-test('reader: perfil inexistente/404/divergente = resultado por perfil (fila segue)', async () => {
-  const x = deps([{ status: 200, body: { data: { user: null }, status: 'ok' } }, { status: 404, body: '' }, ok(biz({ id: '99', username: 'outro' }))]);
-  const read = R.create(x.d);
-  assert.equal((await read('1', 'apagado', null)).contactOutcome, 'profile_unavailable');
-  assert.equal((await read('2', 'sumiu', null)).contactOutcome, 'profile_unavailable');
-  const m = await read('3', 'renomeado', null);
-  assert.equal(m.contactSkip, true); assert.equal(m.contactOutcome, 'identity_mismatch');
-  assert.equal(x.store[K.evidenceKey][0].returnedUsername, 'outro');
-});
-test('reader: falhas de acesso distintas param sem nova tentativa', async () => {
+test('leitor: falhas de acesso viram estados próprios e param sem nova tentativa', async () => {
   const cases = [
-    [{ status: 403, body: { message: 'login_required', status: 'fail' } }, 'access'],
-    [{ status: 0, type: 'opaqueredirect', body: '' }, 'redirect'],
-    [{ status: 200, body: '<!DOCTYPE html><html>Login</html>' }, 'invalid_response'],
-    [{ status: 200, body: { status: 'fail', message: 'checkpoint_required' } }, 'access'],
-    [{ status: 200, body: { require_login: true, status: 'ok', data: { user: null } } }, 'access'],
-    [{ status: 200, body: { graphql: { user: {} }, status: 'ok' } }, 'unexpected_response'],
-    [{ status: 500, body: '' }, 'access'],
-    [{ throw: new TypeError('Failed to fetch') }, 'network'],
+    [{ status: 403, body: { message: 'login_required', status: 'fail' } }, 'login_required', 'login_required'],
+    [{ status: 401, body: { status: 'fail' } }, 'login_required', 'login_required'],
+    [{ status: 400, body: { message: 'checkpoint_required', status: 'fail' } }, 'login_required', 'login_required'],
+    [{ status: 200, body: '<!DOCTYPE html><html>Login</html>' }, 'login_required', 'login_required'],
+    [{ status: 200, body: { status: 'fail', message: 'checkpoint_required' } }, 'login_required', 'login_required'],
+    [{ status: 200, body: { require_login: true, status: 'ok' } }, 'login_required', 'login_required'],
+    [{ status: 403, body: { message: 'Forbidden', status: 'fail' } }, 'access_denied', 'access_denied'],
+    [{ status: 400, body: { message: 'feedback_required', status: 'fail' } }, 'access_denied', 'access_denied'],
+    [{ status: 200, body: { status: 'fail', message: 'algo' } }, 'access_denied', 'access_denied'],
+    [{ status: 500, body: '' }, 'temporary', 'temporary_error'],
+    [{ status: 503, body: { message: 'x' } }, 'temporary', 'temporary_error'],
+    [{ throw: new TypeError('Network Error') }, 'network', 'temporary_error'],
+    [{ status: 200, body: 'texto que não é JSON de perfil' }, 'unexpected_response', 'temporary_error'],
+    [{ status: 200, body: null }, 'unexpected_response', 'temporary_error'],
+    [{ status: 200, body: [] }, 'unexpected_response', 'temporary_error'],
   ];
-  for (const [res, code] of cases) {
-    const x = deps([res]);
-    await assert.rejects(R.create(x.d)('1', 'loja', null), (e) => e.stopCode === code, code);
+  for (const [res, code, state] of cases) {
+    const x = deps([res, ok(person('1', { public_email: 'v@loja.com' }))]);
+    const read = R.create(x.d);
+    await assert.rejects(read('1', 'loja', null), (e) => e.stopCode === code && P.failureState({ code: e.stopCode, status: e.response && e.response.status }) === state, JSON.stringify(res).slice(0, 60));
     assert.equal(x.calls.length, 1);
-    assert.equal(x.store[K.evidenceKey][0].outcome, code);
-    assert.equal(x.store[K.cooldownKey], undefined, 'falha que não é 429 não cria pausa');
+    assert.equal(x.store[K.evidenceKey][0].outcome, state);
+    assert.equal(x.store[K.cooldownKey], undefined, 'só o 429 cria pausa');
+    assert.equal(x.store[K.profileCacheKey], undefined, 'falha não é guardada como resultado');
+    assert.equal(x.store[K.schemaKey] && x.store[K.schemaKey].found || 0, 0);
+    // a falha não virou "sem e-mail": a mesma conta, consultada de novo, ainda entrega o e-mail
+    const again = await read('1', 'loja', null);
+    assert.equal(again.contactOutcome, 'found', code);
   }
 });
-test('reader: cancelamento após a resposta guarda em cache (retomada não repete consulta)', async () => {
-  const x = deps([ok(biz({ username: 'loja', business_email: 'v@loja.com' }))]);
+test('leitor: só HTTP 200 com o objeto do perfil pode terminar em "sem e-mail"', async () => {
+  for (const res of [{ status: 429, body: {} }, { status: 403, body: {} }, { status: 500, body: {} }, { throw: new Error('x') }, { status: 200, body: 'x' }, { status: 200, body: {} }]) {
+    const x = deps([res]);
+    let result = null;
+    try { result = await R.create(x.d)('1', 'a', null); } catch (e) { /* expected */ }
+    assert.equal(result, null, JSON.stringify(res).slice(0, 50) + ' não pode devolver um resultado de perfil');
+  }
+});
+test('leitor: cache por user id — o mesmo perfil não é consultado de novo, nem em outra aba', async () => {
+  const x = deps([ok(person('1', { public_email: 'v@loja.com' }))]);
+  assert.equal((await R.create(x.d)('1', 'loja', null)).contactOutcome, 'found');
+  assert.ok(x.store[K.profileCacheKey]['1']);
+  x.advance(60000);
+  const again = await R.create(x.d)('1', '@Loja', null);   // outra aba: leitor novo, mesmo armazenamento
+  assert.equal(again.fromCache, true); assert.equal(again.contactOutcome, 'found'); assert.equal(again.data.user.public_email, 'v@loja.com');
+  assert.equal(x.calls.length, 1, 'nenhuma nova consulta');
+  // renomeado depois: o id é a chave, o resultado continua valendo
+  assert.equal((await R.create(x.d)('1', 'nome_novo', null)).fromCache, true);
+  assert.equal(x.calls.length, 1);
+});
+test('leitor: validade do cache (14 dias com e-mail, 7 sem e-mail, 3 indisponível) e validação manual sempre consulta', async () => {
+  const x = deps([ok(person('1', { public_email: 'a@x.com' })), ok(person('2', { public_email: '' })), { status: 404, body: { message: 'User not found', status: 'fail' } },
+    ok(person('1', { public_email: 'a@x.com' })), ok(person('2', { public_email: '' })), { status: 404, body: {} }, ok(person('1', { public_email: 'a@x.com' }))]);
+  const read = (id, o) => R.create(x.d)(id, 'u' + id, null, o);
+  await read('1'); await read('2'); const gone = await read('3');
+  assert.equal(gone.contactSkip, true); assert.equal(gone.contactOutcome, 'profile_unavailable');
+  assert.equal(x.calls.length, 3);
+  x.advance(2.5 * DAY);
+  for (const id of ['1', '2', '3']) assert.equal((await read(id)).fromCache, true, id + ' em 2,5 dias');
+  x.advance(1 * DAY);   // 3,5 dias: o indisponível venceu
+  assert.equal((await read('3')).fromCache, undefined); assert.equal(x.calls.length, 4 - 1 + 1);
+});
+test('leitor: validade do cache — sem e-mail vence em 7 dias, com e-mail em 14', async () => {
+  const x = deps([ok(person('1', { public_email: 'a@x.com' })), ok(person('2', { public_email: '' })), ok(person('2', { public_email: 'novo@x.com' })), ok(person('1', { public_email: 'b@x.com' }))]);
+  const read = (id, o) => R.create(x.d)(id, 'u' + id, null, o);
+  await read('1'); await read('2');
+  x.advance(6 * DAY);
+  assert.equal((await read('2')).fromCache, true); assert.equal((await read('1')).fromCache, true);
+  x.advance(2 * DAY);   // 8 dias
+  const renewed = await read('2');
+  assert.equal(renewed.fromCache, undefined); assert.equal(renewed.publicContactResult.email, 'novo@x.com');
+  assert.equal((await read('1')).fromCache, true, 'com e-mail ainda vale');
+  x.advance(7 * DAY);   // 15 dias
+  assert.equal((await read('1')).data.user.public_email, 'b@x.com');
+  // validação manual: sempre faz a consulta real
+  const y = deps([ok(person('1', { public_email: 'a@x.com' })), ok(person('1', { public_email: 'a@x.com' }))]);
+  await R.create(y.d)('1', 'u1', null);
+  const probe = await R.create(y.d)('1', 'u1', null, { probe: true });
+  assert.equal(probe.fromCache, undefined); assert.equal(y.calls.length, 2); assert.equal(y.store[K.evidenceKey][0].probe, true);
+});
+test('leitor: duas leituras simultâneas do mesmo id = 1 consulta; uma de cada vez entre perfis', async () => {
+  const x = deps([ok(person('1', { public_email: 'a@x.com' })), ok(person('2'))]);
+  const read = R.create(x.d);
+  const [a, b, c] = await Promise.all([read('1', 'u1', null), read('1', 'u1', null), read('2', 'u2', null)]);
+  assert.equal(a.contactOutcome, 'found'); assert.equal(b.fromCache, true); assert.equal(c.contactOutcome, 'empty');
+  assert.equal(x.calls.length, 2); assert.equal(x.maxActive, 1);
+  assert.ok(x.calls[1].at - x.calls[0].at >= 10000, 'mínimo de 10 s entre consultas');
+});
+test('leitor: comentário sem id — resolve pelo cache de respostas anteriores; sem cache, não consulta nada', async () => {
+  const x = deps([ok(person('555', { username: 'maria', public_email: 'm@loja.com' }))]);
+  await R.create(x.d)('555', 'maria', null);
+  const known = await R.create(x.d)('', 'Maria', null);
+  assert.equal(known.fromCache, true); assert.equal(known.contactUserId, '555');
+  for (const bad of ['u:ninguem', '', 'abc']) {
+    const none = await R.create(x.d)(bad, 'ninguem', null);
+    assert.equal(none.contactSkip, true); assert.equal(none.contactOutcome, 'no_user_id');
+  }
+  assert.equal(x.calls.length, 1, 'nenhuma outra rota é tentada para resolver o id');
+});
+test('leitor: id divergente não é aplicado nem guardado; perfil ausente (404 ou user nulo) é resultado da linha', async () => {
+  const x = deps([ok(person('999', { public_email: 'dono@x.com' })), { status: 404, body: { message: 'User not found', status: 'fail' } }, { status: 200, body: { user: null, status: 'ok' } },
+    ok({ username: 'sem_id', public_email: 'a@b.com' })]);
+  const read = R.create(x.d);
+  const m = await read('1', 'u1', null);
+  assert.equal(m.contactSkip, true); assert.equal(m.contactOutcome, 'identity_mismatch');
+  assert.equal(x.store[K.profileCacheKey] && x.store[K.profileCacheKey]['1'], undefined);
+  assert.equal(x.store[K.evidenceKey][0].returnedId, '999');
+  assert.equal((await read('2', 'u2', null)).contactOutcome, 'profile_unavailable');
+  assert.equal((await read('3', 'u3', null)).contactOutcome, 'profile_unavailable');
+  await assert.rejects(read('4', 'u4', null), (e) => e.stopCode === 'unexpected_response', 'resposta sem id do perfil não é aplicada');
+});
+test('leitor: cancelamento após a resposta guarda o resultado (retomada não repete consulta)', async () => {
+  const x = deps([ok(person('1', { public_email: 'v@loja.com' }))]);
   const read = R.create(x.d);
   let current = true;
   const p = read('1', 'loja', () => current);
   setTimeout(() => { current = false; }, 1);
   await assert.rejects(p, (e) => e.stopCode === 'cancelled');
-  const r = await read('1', 'loja', () => true);
+  const r = await R.create(x.d)('1', 'loja', () => true);
   assert.equal(r.fromCache, true); assert.equal(r.contactOutcome, 'found'); assert.equal(x.calls.length, 1);
 });
-test('reader: nome inválido não consulta; evidência limitada a 20', async () => {
-  const x = deps([]);
-  await assert.rejects(R.create(x.d)('1', 'nome inválido!', null), (e) => e.stopCode === 'identity');
-  assert.equal(x.calls.length, 0);
-  const y = deps(Array.from({ length: 25 }, (_, i) => ok({ id: String(i), username: 'u' + i, is_professional_account: false })));
-  const read = R.create(y.d);
-  for (let i = 0; i < 25; i++) await read(String(i), 'u' + i, null);
-  assert.equal(y.store[K.evidenceKey].length, 20); assert.equal(y.store[K.evidenceKey][0].username, 'u24');
-});
-
-const callUser = (id, u) => ok(biz({ id, username: u, business_email: null, business_phone_number: null, business_contact_method: 'CALL', should_show_public_contacts: true }));
-test('reader: comerciais com CALL/TEXT e e-mail nulo seguem a fila como "vazio"', async () => {
-  const x = deps([ok({ id: '1', username: 'p1', is_professional_account: false }), callUser('2', 'w1'), callUser('3', 'w2'), callUser('4', 'w3'), callUser('5', 'w4'),
-    ok(biz({ id: '6', username: 'f1', business_email: 'a@b.com' }))]);
+test('leitor: evidência sanitizada — nenhum cookie, cabeçalho ou e-mail completo; limitada a 20', async () => {
+  const x = deps(Array.from({ length: 25 }, (_, i) => ok(person(String(i + 1), { public_email: 'p' + i + '@loja.com', message: 'x' }))));
   const read = R.create(x.d);
-  assert.equal((await read('1', 'p1', null)).contactOutcome, 'not_professional');
-  for (const [id, u] of [['2', 'w1'], ['3', 'w2'], ['4', 'w3'], ['5', 'w4']]) {
-    const r = await read(id, u, null);
-    assert.equal(r.contactOutcome, 'empty'); assert.equal(r.commercialSchemaUnsupported, false);
-  }
-  assert.equal((await read('6', 'f1', null)).contactOutcome, 'found');
-  assert.equal(x.calls.length, 6);
-  assert.ok(x.store[K.evidenceKey].every((e) => e.withheld === false));
-  assert.equal(x.store[K.schemaKey].found, 1);
+  for (let i = 1; i <= 25; i++) await read(String(i), 'u' + i, null);
+  assert.equal(x.store[K.evidenceKey].length, 20); assert.equal(x.store[K.evidenceKey][0].username, 'u25');
+  const dump = JSON.stringify([x.store[K.evidenceKey], x.store[K.schemaKey]]);
+  assert.ok(!/@loja\.com/.test(dump.replace(/\w\*\*\*@loja\.com/g, '')), 'só e-mail mascarado');
+  assert.ok(!/cookie|csrf|sessionid|authorization|token|x-ig/i.test(dump));
 });
-test('reader: 429 repetido sinaliza recusa da rota mas NUNCA bloqueia a fila', async () => {
-  const x = deps([{ status: 429, headers: { 'retry-after': '60' }, body: {} }]);
-  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'rate_limit' && !e.routeRefusing);
-  const y = deps([{ status: 429, body: {} }], { store: { [K.schemaKey]: x.store[K.schemaKey] } });
-  await assert.rejects(R.create(y.d)('2', 'b', null), (e) => e.routeRefusing === true && e.refusalCount === 2);
-  assert.equal(R.routeRefusing(y.store[K.schemaKey]), true);
-  // o bloqueio de rota continua reservado a campo omitido/retido
-  assert.equal(R.blockReason(y.store[K.schemaKey]), '');
-  const z = deps([ok(biz({ id: '3', username: 'c', business_email: 'c@x.com' }))], { store: { [K.schemaKey]: y.store[K.schemaKey] } });
-  assert.equal((await R.create(z.d)('3', 'c', null)).contactOutcome, 'found');
-  assert.equal(R.routeRefusing(z.store[K.schemaKey]), false);
-});
-test('reader: HTTP 400 conta como recusa; 403 não', async () => {
-  const body = { message: 'feedback_required', status: 'fail' };
-  const x = deps([{ status: 400, body: body }]);
-  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'access');
-  const y = deps([{ status: 400, body: body }], { store: { [K.schemaKey]: x.store[K.schemaKey] } });
-  await assert.rejects(R.create(y.d)('2', 'b', null), (e) => e.routeRefusing === true);
-  assert.equal(R.blockReason(y.store[K.schemaKey]), '');
-  const w = deps([{ status: 403, body: { message: 'login_required' } }, { status: 403, body: { message: 'login_required' } }]);
-  const readW = R.create(w.d);
-  await assert.rejects(readW('1', 'a', null), (e) => e.stopCode === 'access');
-  await assert.rejects(readW('2', 'b', null), (e) => e.stopCode === 'access' && !e.routeRefusing);
-  assert.equal(R.routeRefusing(w.store[K.schemaKey]), false);
-});
-test('reader: uma resposta de perfil real zera as recusas', async () => {
-  const x = deps([{ status: 429, body: {} }], {});
-  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'rate_limit');
-  const y = deps([ok(biz({ id: '2', username: 'b', business_email: 'b@x.com' })), { status: 429, body: {} }], { store: { [K.schemaKey]: x.store[K.schemaKey] } });
-  const read = R.create(y.d);
-  assert.equal((await read('2', 'b', null)).contactOutcome, 'found');
-  assert.equal(y.store[K.schemaKey].refusals, 0);
-  assert.equal(y.store[K.schemaKey].responses, 1);
-  await assert.rejects(read('3', 'c', null), (e) => e.stopCode === 'rate_limit' && !e.routeRefusing);
-});
-test('reader: HTTP 404 é resposta de perfil e zera as recusas', async () => {
-  const x = deps([{ status: 429, body: {} }]);
-  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'rate_limit');
-  const y = deps([{ status: 404, body: '' }, { status: 429, body: {} }], { store: { [K.schemaKey]: x.store[K.schemaKey] } });
-  const read = R.create(y.d);
-  assert.equal((await read('2', 'b', null)).contactOutcome, 'profile_unavailable');
-  assert.equal(y.store[K.schemaKey].responses, 1);
-  assert.equal(y.store[K.schemaKey].refusals, 0);
-  delete y.store[K.cooldownKey];
-  await assert.rejects(read('3', 'c', null), (e) => e.stopCode === 'rate_limit' && !e.routeRefusing);
-  assert.equal(R.routeRefusing(y.store[K.schemaKey]), false);
-});
-test('reader: schema antigo (sem contador de respostas) não vira "nunca respondeu"', () => {
-  const legacy = { endpoint: 'instagram_web_profile_info', keysPresent: 30, omittedOther: 4, omittedProfessional: ['a', 'b'] };
-  const schema = R.readSchema(legacy);
-  assert.equal(schema.responses, 36);
-  assert.equal(R.routeRefusing(Object.assign({}, legacy, { refusals: 5 })), false);
-});
-test('reader: divergência de identidade em cache não é servida ao perfil retornado', async () => {
-  const x = deps([
-    { status: 200, body: { data: { user: { id: '222', username: 'x', is_business_account: true, is_professional_account: true, business_email: 'dono@x.com', should_show_public_contacts: true } }, status: 'ok' } },
-    { status: 200, body: { data: { user: { id: '222', username: 'x', is_business_account: true, is_professional_account: true, business_email: 'dono@x.com', should_show_public_contacts: true } }, status: 'ok' } },
-  ]);
-  const read = R.create(x.d);
-  assert.equal((await read('111', 'x', null)).contactOutcome, 'identity_mismatch');
-  const owner = await read('222', 'x', null);
-  assert.equal(owner.contactOutcome, 'found');
-  assert.equal(owner.fromCache, undefined);
-  assert.equal(x.calls.length, 2);
-  // repetir a MESMA consulta reaproveita o cache (sem nova requisição)
-  const again = await read('222', 'x', null);
-  assert.equal(again.fromCache, true);
-  assert.equal(again.contactOutcome, 'found');
-  assert.equal(x.calls.length, 2);
-});
-
-test('reader: mensagem do Instagram nunca chega como HTML às notificações', async () => {
+test('leitor: mensagem do Instagram nunca chega como HTML às notificações', async () => {
   const x = deps([{ status: 403, body: { status: 'fail', message: "<div>Sessão <a href='https://x.y'>aqui</a> & \"z\"</div>" } }]);
   await assert.rejects(R.create(x.d)('1', 'a', null), (e) => !/[<>&]/.test(e.message) && /Sessão/.test(e.message));
   assert.ok(!/[<>&]/.test(x.store[K.evidenceKey][0].message));
 });
-test('reader: 404 conta como resposta da consulta, mas não como perfil entregue', async () => {
-  const x = deps([{ status: 404, body: '' }, ok(biz({ id: '2', username: 'b' }))]);
-  const read = R.create(x.d);
-  await read('1', 'a', null);
-  assert.equal(x.store[K.schemaKey].responses, 1); assert.equal(x.store[K.schemaKey].profiles, 0);
-  await read('2', 'b', null);
-  assert.equal(x.store[K.schemaKey].responses, 2); assert.equal(x.store[K.schemaKey].profiles, 1);
+test('ritmo adaptativo: 429 e 400 dobram o intervalo (até 2 min); 5 respostas seguidas reduzem 20%', async () => {
+  const x = deps([{ status: 429, body: {} }]);
+  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'rate_limit');
+  assert.equal(x.store[K.pacingKey].spacing, 20000);
+  const w = deps([{ status: 400, body: { message: 'feedback_required' } }]);
+  await assert.rejects(R.create(w.d)('1', 'a', null), (e) => e.stopCode === 'access_denied');
+  assert.equal(w.store[K.pacingKey].spacing, 20000);
+  const y = deps([{ status: 429, body: {} }], { store: { [K.pacingKey]: { spacing: 90000, okStreak: 3 } } });
+  await assert.rejects(R.create(y.d)('1', 'a', null));
+  assert.deepEqual(y.store[K.pacingKey], { spacing: R.maxSpacing, okStreak: 0 });
+  const ids = [1, 2, 3, 4, 5, 6];
+  const z = deps(ids.map((i) => ok(person(String(i)))), { store: { [K.pacingKey]: { spacing: 40000, okStreak: 0 } } });
+  const read = R.create(z.d);
+  for (const i of ids.slice(0, 5)) await read(String(i), 'u' + i, null);
+  assert.deepEqual(z.store[K.pacingKey], { spacing: 32000, okStreak: 0 });
+  for (let i = 1; i < 5; i++) assert.ok(z.calls[i].at - z.calls[i - 1].at >= 40000, 'intervalo de 40 s respeitado');
+  await read('6', 'u6', null);
+  assert.ok(z.calls[5].at - z.calls[4].at >= 32000 && z.calls[5].at - z.calls[4].at < 40000);
+  const base = deps([ok(person('1'))], { store: { [K.pacingKey]: { spacing: 1, okStreak: 0 } } });
+  await R.create(base.d)('1', 'a', null);
+  assert.ok(base.store[K.pacingKey].spacing >= R.baseSpacing, 'nunca abaixo de 10 s');
 });
-test('reader: não existe mais parada por decisão de rota (blockReason sempre vazio)', () => {
-  const old = [
-    { endpoint: 'instagram_web_profile_info', keysPresent: 3, found: 0, withheldProfessional: ['a', 'b', 'c'] },
-    { endpoint: 'instagram_web_profile_info', keysPresent: 0, omittedProfessional: ['a', 'b', 'c'] },
-    undefined, null, {},
-  ];
-  for (const v of old) { assert.equal(R.blockReason(v), ''); assert.equal(R.unsupported(v), false); }
+test('ritmo adaptativo: intervalo salvo maior vale para todas as abas; a pausa 429 vale depois do intervalo', async () => {
+  const waits = [];
+  const x = deps([ok(person('1'))], { store: { [K.pacingKey]: { spacing: 80000, okStreak: 0 }, [K.lastStartKey]: 1_800_000_000_000 - 1000 }, waits });
+  await R.create(x.d)('1', 'a', null);
+  assert.deepEqual(waits, [79000]); assert.equal(x.calls[0].at, 1_800_000_000_000 + 79000);
+  const y = deps([], { store: { [K.pacingKey]: { spacing: 30000, okStreak: 0 }, [K.lastStartKey]: 1_800_000_000_000 } });
+  y.d.wait = async (ms) => { y.advance(ms); y.store[K.cooldownKey] = y.d.now() + 3600000; };
+  await assert.rejects(R.create(y.d)('1', 'a', null), (e) => e.stopCode === 'cooldown');
+  assert.equal(y.calls.length, 0);
+});
+test('emailPaths: caminhos e tipos dos campos de e-mail, sem valores', () => {
+  const paths = R.emailPaths(fixture('info-business.json'));
+  for (const p of ['user.public_email=texto', 'user.business_contact_method=texto', 'user.should_show_public_contacts=boolean']) assert.ok(paths.includes(p), p + ' em ' + JSON.stringify(paths));
+  assert.ok(!paths.some((p) => /business_email/.test(p)), 'a rota /info/ não traz business_email');
+  assert.ok(R.emailPaths(fixture('web-business-null.json')).includes('data.user.business_email=null'), 'a rota web traz business_email nulo');
+  assert.ok(!JSON.stringify(paths).includes('@'), 'nenhum valor de e-mail');
+  assert.deepEqual(R.emailPaths(null), []); assert.deepEqual(R.emailPaths('<html>'), []);
+});
+test('pausa: o 429 não depende do armazenamento — com o armazenamento quebrado continua 429 e registra "pausa NÃO salva"', async () => {
+  const storage = {
+    data: { ig_commercial_web_last_start: 0 },
+    get: async (keys) => { const out = {}; [].concat(keys).forEach((k) => { if (k in storage.data) out[k] = storage.data[k]; }); return out; },
+    set: async (o) => { if ('ig_contact_cooldown_until' in o) throw new Error('quota'); Object.assign(storage.data, o); },
+  };
+  const read = R.create({ contacts: P, storage, locks: realLock(), now: () => 1000000, wait: async () => {},
+    request: async () => ({ status: 429, headers: {}, data: {} }) });
+  await assert.rejects(read('7', 'loja_x', null), (e) => e.stopCode === 'rate_limit' && e.cooldownUntil === 1000000 + 3600000);
+  const ev = storage.data.ig_commercial_contact_evidence_v14[0];
+  assert.equal(ev.http, 429); assert.equal(ev.retryAfter, null); assert.equal(ev.cooldownSaved, false);
 });
 
 /* PATCHED 15.2: the shared pause is merged under a lock, never shortened, and a failed save is visible. */
@@ -428,27 +529,17 @@ function realLock() {
   return { request: (name, fn) => { const prev = queues[name] || Promise.resolve(); const run = prev.then(() => fn()); queues[name] = run.catch(() => {}); return run; } };
 }
 test('pausa: duas abas gravando ao mesmo tempo nunca encurtam a pausa (com a trava)', async () => {
-  if (!R.saveCooldown) return; // PATCHED 15.1 or older
   const store = slowStore({ ig_contact_cooldown_until: 0 });
   const locks = realLock();
   await Promise.all([R.saveCooldown(store, locks, 5000), R.saveCooldown(store, locks, 9000), R.saveCooldown(store, locks, 7000)]);
   assert.equal(store.data.ig_contact_cooldown_until, 9000);
 });
-test('pausa: sem a trava, a mesma corrida perde a pausa maior (defeito corrigido)', async () => {
-  const store = slowStore({ ig_contact_cooldown_until: 0 });
-  // The pre-15.2 dashboard merge: read, then write max(saved, own), with no lock.
-  const unlocked = async (until) => { const saved = await store.get('ig_contact_cooldown_until'); await store.set({ ig_contact_cooldown_until: Math.max(saved.ig_contact_cooldown_until || 0, until) }); };
-  await Promise.all([unlocked(9000), unlocked(5000)]);
-  assert.equal(store.data.ig_contact_cooldown_until, 5000, 'a gravação mais lenta apagou a pausa maior');
-});
 test('pausa: uma pausa salva maior nunca é reduzida por um Retry-After menor', async () => {
-  if (!R.saveCooldown) return;
   const store = slowStore({ ig_contact_cooldown_until: 50000 });
   const value = await R.saveCooldown(store, realLock(), 20000);
   assert.equal(value, 50000); assert.equal(store.data.ig_contact_cooldown_until, 50000);
 });
 test('pausa: falha passageira do armazenamento é repetida 1 vez; falha persistente é reportada', async () => {
-  if (!R.saveCooldown) return;
   let fails = 1;
   const flaky = { data: {}, get: async () => ({}), set: async (o) => { if (fails-- > 0) throw new Error('quota'); Object.assign(flaky.data, o); } };
   assert.equal(await R.saveCooldown(flaky, realLock(), 1234, async () => {}), 1234);
@@ -456,140 +547,3 @@ test('pausa: falha passageira do armazenamento é repetida 1 vez; falha persiste
   const broken = { get: async () => { throw new Error('Extension context invalidated'); }, set: async () => {} };
   await assert.rejects(R.saveCooldown(broken, realLock(), 1234, async () => {}));
 });
-test('leitor: 429 com armazenamento quebrado continua sendo 429 e registra pausa NÃO salva', async () => {
-  const storage = {
-    data: { ig_commercial_web_last_start: 0 },
-    get: async (keys) => { const out = {}; [].concat(keys).forEach((k) => { if (k in storage.data) out[k] = storage.data[k]; }); return out; },
-    set: async (o) => { if ('ig_contact_cooldown_until' in o) throw new Error('quota'); Object.assign(storage.data, o); },
-  };
-  const read = R.create({ contacts: P, storage, locks: realLock(), now: () => 1000000, wait: async () => {},
-    fetch: async () => ({ status: 429, ok: false, type: 'basic', headers: { get: () => null }, text: async () => '{}' }) });
-  await assert.rejects(read('', 'loja_x', null), (e) => e.stopCode === 'rate_limit' && e.cooldownUntil === 1000000 + 3600000);
-  const ev = storage.data.ig_commercial_contact_evidence_v14[0];
-  assert.equal(ev.http, 429); assert.equal(ev.retryAfter, null);
-  if (R.saveCooldown) assert.equal(ev.cooldownSaved, false);
-});
-
-/* ---------- PATCHED 15.3: field paths, persistent cache, adaptive spacing ---------- */
-test('emailPaths: lista caminhos e tipos de todos os campos de e-mail, sem valores', () => {
-  const body = { data: { user: {
-    business_email: null, public_email: 'priv@loja.com', business_contact_method: 'CALL', should_show_public_contacts: true,
-    nested: { contact_email: 'x@y.com', deep: { email_address: '' } }, links: [{ email: 'z@w.com' }], biography: 'bio@site.com',
-  } }, status: 'ok' };
-  const paths = R.emailPaths(body);
-  for (const p of ['data.user.business_email=null', 'data.user.public_email=texto', 'data.user.business_contact_method=texto',
-    'data.user.should_show_public_contacts=boolean', 'data.user.nested.contact_email=texto', 'data.user.nested.deep.email_address=vazio',
-    'data.user.links[].email=texto']) assert.ok(paths.includes(p), p + ' em ' + JSON.stringify(paths));
-  assert.ok(!JSON.stringify(paths).includes('@'), 'nenhum valor de e-mail');
-  assert.ok(!paths.some((p) => p.startsWith('data.user.biography')), 'bio não é campo de e-mail');
-  assert.deepEqual(R.emailPaths(null), []); assert.deepEqual(R.emailPaths('<html>'), []);
-});
-test('leitor: evidência registra os caminhos de e-mail recebidos, sem valores', async () => {
-  const x = deps([ok(biz({ username: 'loja', business_email: 'vendas@loja.com', business_contact_method: 'CALL', should_show_public_contacts: true }))]);
-  await R.create(x.d)('1', 'loja', null);
-  const ev = x.store[K.evidenceKey][0];
-  assert.ok(ev.emailPaths.includes('data.user.business_email=texto'));
-  assert.ok(ev.emailPaths.includes('data.user.business_contact_method=texto'));
-  assert.ok(!JSON.stringify(ev.emailPaths).includes('vendas'));
-  const y = deps([{ status: 429, body: { message: 'Please wait a few minutes', status: 'fail' } }]);
-  await assert.rejects(R.create(y.d)('1', 'loja', null), (e) => e.stopCode === 'rate_limit');
-  assert.equal(y.store[K.evidenceKey][0].emailPaths, undefined, '429 não lê o corpo');
-});
-test('cache persistente: o mesmo perfil não é consultado de novo em outra extração', async () => {
-  const x = deps([ok(biz({ id: '1', username: 'loja', business_email: 'v@loja.com' }))]);
-  const first = await R.create(x.d)('1', 'loja', null);
-  assert.equal(first.contactOutcome, 'found'); assert.equal(x.calls.length, 1);
-  assert.ok(x.store[K.profileCacheKey]['instagram_web_profile_info:loja']);
-  // Novo leitor = outra aba/extração, mesmo armazenamento.
-  x.advance(60000);
-  const again = await R.create(x.d)('1', '@Loja', null);
-  assert.equal(again.fromCache, true); assert.equal(again.contactOutcome, 'found'); assert.equal(again.data.user.public_email, 'v@loja.com');
-  assert.equal(x.calls.length, 1, 'nenhuma nova consulta');
-});
-test('cache persistente: id diferente, validade vencida e verificação manual consultam de novo', async () => {
-  const x = deps([
-    ok(biz({ id: '1', username: 'loja', business_email: 'v@loja.com' })),
-    ok(biz({ id: '2', username: 'loja', business_email: 'novo@loja.com' })),
-    ok(biz({ id: '2', username: 'loja', business_email: 'novo@loja.com' })),
-    ok(biz({ id: '2', username: 'loja', business_email: 'novo@loja.com' })),
-  ]);
-  await R.create(x.d)('1', 'loja', null);
-  // O nome passou para outra conta: o cache do id 1 não serve ao id 2.
-  x.advance(20000);
-  assert.equal((await R.create(x.d)('2', 'loja', null)).fromCache, undefined);
-  assert.equal(x.calls.length, 2);
-  // Validade de 14 dias para perfis respondidos.
-  x.advance(15 * 864e5);
-  assert.equal((await R.create(x.d)('2', 'loja', null)).fromCache, undefined);
-  assert.equal(x.calls.length, 3);
-  // A verificação manual sempre faz a consulta real.
-  x.advance(20000);
-  const probe = await R.create(x.d)('', 'loja', null, { probe: true });
-  assert.equal(probe.fromCache, undefined); assert.equal(x.calls.length, 4);
-});
-test('cache persistente: indisponível vale 3 dias; divergência de identidade não é guardada', async () => {
-  const x = deps([{ status: 404, body: '' }, { status: 404, body: '' }, ok(biz({ id: '99', username: 'outro' })), ok(biz({ id: '99', username: 'outro' }))]);
-  await R.create(x.d)('1', 'sumiu', null);
-  x.advance(2 * 864e5);
-  assert.equal((await R.create(x.d)('1', 'sumiu', null)).fromCache, true);
-  x.advance(2 * 864e5);
-  assert.equal((await R.create(x.d)('1', 'sumiu', null)).fromCache, undefined);
-  assert.equal(x.calls.length, 2);
-  x.advance(20000);
-  assert.equal((await R.create(x.d)('3', 'renomeado', null)).contactOutcome, 'identity_mismatch');
-  assert.equal(x.store[K.profileCacheKey]['instagram_web_profile_info:renomeado'], undefined);
-  x.advance(20000);
-  await R.create(x.d)('3', 'renomeado', null);
-  assert.equal(x.calls.length, 4);
-});
-test('cache persistente: limite de 3000 perfis descarta os mais antigos', async () => {
-  const now = 1_800_000_000_000, big = {};
-  for (let i = 0; i < 3000; i++) big['instagram_web_profile_info:u' + i] = { at: now - 864e5 + i, userId: String(i), result: { contactOutcome: 'empty' } };
-  const x = deps([ok(biz({ id: 'n', username: 'novo' }))], { store: { [K.profileCacheKey]: big } });
-  await R.create(x.d)('n', 'novo', null);
-  const cache = x.store[K.profileCacheKey];
-  assert.equal(Object.keys(cache).length, 3000);
-  assert.ok(cache['instagram_web_profile_info:novo']); assert.equal(cache['instagram_web_profile_info:u0'], undefined);
-});
-test('cache persistente: falha do armazenamento do cache não muda o resultado', async () => {
-  const x = deps([ok(biz({ id: '1', username: 'loja', business_email: 'v@loja.com' }))]);
-  const set = x.d.storage.set;
-  x.d.storage.set = async (o) => { if (K.profileCacheKey in o) throw new Error('quota'); return set(o); };
-  const r = await R.create(x.d)('1', 'loja', null);
-  assert.equal(r.contactOutcome, 'found');
-});
-test('ritmo adaptativo: 429 dobra o intervalo (até 2 min); 5 respostas seguidas reduzem 20%', async () => {
-  const x = deps([{ status: 429, body: {} }]);
-  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'rate_limit');
-  assert.equal(x.store[K.pacingKey].spacing, 20000);
-  const y = deps([{ status: 429, body: {} }], { store: { [K.pacingKey]: { spacing: 90000, okStreak: 3 } } });
-  await assert.rejects(R.create(y.d)('1', 'a', null));
-  assert.deepEqual(y.store[K.pacingKey], { spacing: R.maxSpacing, okStreak: 0 });
-  const users = [1, 2, 3, 4, 5, 6].map((i) => biz({ id: String(i), username: 'u' + i }));
-  const waits = [];
-  const z = deps(users.map(ok), { store: { [K.pacingKey]: { spacing: 40000, okStreak: 0 } }, waits });
-  const read = R.create(z.d);
-  for (const u of users.slice(0, 5)) await read(u.id, u.username, null);
-  assert.deepEqual(z.store[K.pacingKey], { spacing: 32000, okStreak: 0 });
-  for (let i = 1; i < 5; i++) assert.ok(z.calls[i].at - z.calls[i - 1].at >= 40000, 'intervalo de 40 s respeitado');
-  await read('6', 'u6', null);
-  assert.ok(z.calls[5].at - z.calls[4].at >= 32000 && z.calls[5].at - z.calls[4].at < 40000);
-  const base = deps([ok(biz({ id: '1', username: 'a' }))], { store: { [K.pacingKey]: { spacing: 1, okStreak: 0 } } });
-  await R.create(base.d)('1', 'a', null);
-  assert.ok(base.store[K.pacingKey].spacing >= R.baseSpacing, 'nunca abaixo de 10 s');
-});
-test('ritmo adaptativo: intervalo salvo maior vale para todas as abas, sem consulta durante a espera', async () => {
-  const waits = [];
-  const x = deps([ok(biz({ id: '1', username: 'a' }))], { store: { [K.pacingKey]: { spacing: 80000, okStreak: 0 }, ig_commercial_web_last_start: 1_800_000_000_000 - 1000 }, waits });
-  await R.create(x.d)('1', 'a', null);
-  assert.deepEqual(waits, [79000]);
-  assert.equal(x.calls[0].at, 1_800_000_000_000 + 79000);
-});
-test('ritmo adaptativo: a pausa 429 continua valendo depois do intervalo', async () => {
-  // Pausa salva por outra aba durante a espera do intervalo: nenhuma consulta sai.
-  const x = deps([], { store: { [K.pacingKey]: { spacing: 30000, okStreak: 0 }, ig_commercial_web_last_start: 1_800_000_000_000 } });
-  x.d.wait = async (ms) => { x.advance(ms); x.store[K.cooldownKey] = x.d.now() + 3600000; };
-  await assert.rejects(R.create(x.d)('1', 'a', null), (e) => e.stopCode === 'cooldown');
-  assert.equal(x.calls.length, 0);
-});
-

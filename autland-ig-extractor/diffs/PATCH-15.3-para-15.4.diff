@@ -1,0 +1,1449 @@
+--- 15.3/manifest.json
++++ 15.4/manifest.json
+@@ -78,5 +78,5 @@
+          ]
+       }
+    ],
+-   "version_name": "2.5.1 PATCHED 15.3 - Diagnostico do contato comercial"
++   "version_name": "2.5.1 PATCHED 15.4 - Email comercial via users info"
+ }
+--- 15.3/public-contact-parser.js
++++ 15.4/public-contact-parser.js
+@@ -1,7 +1,9 @@
+-/* PATCHED 14-15.3: email is exclusively the published Instagram commercial contact.
+- * Each profile is classified as found, empty, hidden, omitted or personal
+- * account, kept apart from access failures. No network calls, login/recovery
+- * fields, viewer traversal, inferred contacts, or bio/link fallback for email.
++/* PATCHED 14-15.4: email is exclusively the published Instagram commercial contact.
++ * Each profile ends in one contact state (email_found, no_public_email, rate_limited,
++ * login_required, access_denied, temporary_error, pending; profile_unavailable for a
++ * deleted profile), kept apart from access failures. Only an HTTP 200 answer with the real
++ * profile object can mean "no public email". No network calls, login/recovery fields,
++ * viewer traversal, inferred contacts, or bio/link fallback for email.
+  */
+ (function (root, factory) {
+   var api = factory();
+@@ -15,33 +17,42 @@
+   // PATCHED 10-13 block names remain readable for phones and saved rows only.
+   var contactBlocks = ["professional_contact_info", "professional_metadata", "public_contact_info", "business_contact_info"];
+   var phoneFields = ["contact_phone_number", "public_phone_number", "business_phone_number"];
++  var noEmail = "Perfil não disponibiliza e-mail público";
++  // One text per detailed outcome. CALL/TEXT says nothing about an E-mail button, and an
++  // empty field is just empty: the detail after the dot only says what the answer held.
+   var statusText = {
+-    found: "Contato público do Instagram",
+-    empty: "Campo comercial vazio",
+-    // PATCHED 14-15.2 rows: the "withheld" label was an inference (CALL/TEXT does not
+-    // prove an E-mail button). Old rows are shown as what the response really had.
+-    not_delivered: "Campo comercial vazio",
+-    hidden: "Contato oculto pelo perfil",
+-    omitted: "Campo omitido pela consulta",
+-    not_professional: "Conta pessoal (sem botão Contato)",
+-    invalid: "Formato de e-mail inválido",
++    found: "E-mail comercial encontrado",
++    empty: noEmail + " · campo vazio",
++    not_delivered: noEmail + " · campo vazio",
++    hidden: noEmail + " · contato oculto pelo perfil",
++    omitted: noEmail + " · campo ausente na resposta",
++    not_professional: noEmail + " · conta pessoal",
++    invalid: noEmail + " · formato de e-mail inválido",
+     profile_unavailable: "Perfil indisponível",
+     identity_mismatch: "Perfil divergente (dados não aplicados)",
++    no_user_id: "Sem ID do perfil (não consultado)",
+     // Statuses saved by PATCHED 12-13 rows.
+-    not_published: "Sem e-mail comercial publicado",
+-    not_returned: "Não retornado pelo Instagram",
+-    source_not_verified: "Contato comercial não verificado"
++    not_published: noEmail + " · nenhum e-mail publicado",
++    not_returned: noEmail + " · campo não retornado",
++    source_not_verified: noEmail + " · e-mail de outra origem descartado"
+   };
+-  var failureTexts = {
+-    rate_limit: "Falha de acesso: limite do Instagram (HTTP 429)",
+-    cooldown: "Aguardando o fim da pausa do Instagram",
+-    redirect: "Falha de acesso: redirecionamento (login ou verificação)",
+-    access: "Falha de acesso",
+-    network: "Falha de acesso: rede ou tempo esgotado",
+-    invalid_response: "Falha de acesso: resposta não JSON",
+-    unexpected_response: "Falha de acesso: resposta em formato desconhecido",
+-    unsupported: "Consulta sem campo comercial (fila parada)",
+-    request: "Falha ao processar a consulta"
++  var stateText = {
++    email_found: statusText.found,
++    no_public_email: noEmail,
++    pending: "Aguardando consulta",
++    rate_limited: "Consulta pausada pelo Instagram",
++    login_required: "Sessão precisa ser verificada",
++    access_denied: "Acesso negado pelo Instagram",
++    temporary_error: "Falha temporária na consulta",
++    profile_unavailable: "Perfil indisponível"
++  };
++  // Failure codes (reader errors and rows saved by older versions) -> contact state.
++  var failureStates = {
++    rate_limit: "rate_limited", cooldown: "rate_limited",
++    login_required: "login_required", redirect: "login_required", invalid_response: "login_required",
++    access_denied: "access_denied", access: "access_denied",
++    network: "temporary_error", temporary: "temporary_error", unexpected_response: "temporary_error",
++    request: "temporary_error", unsupported: "temporary_error"
+   };
+ 
+   function text(value) {
+@@ -106,7 +117,7 @@
+     else if (returned) status = "empty";
+     else status = "omitted";
+     return { status: status, email: status === "found" ? email : "", source: status === "found" ? source : "",
+-      profileType: type, fieldReturned: returned, keys: keys, withheld: false };
++      profileType: type, fieldReturned: returned, keys: keys };
+   }
+   function commercialEmail(row) {
+     if (!row || typeof row !== "object") return "";
+@@ -117,18 +128,36 @@
+     });
+     return trusted && (row.emailKind === "commercial_contact" || Number(row.contactParserVersion) >= 10) ? validEmail(row.email) : "";
+   }
++  function failureState(failure) {
++    if (!failure || typeof failure !== "object") return "pending";
++    var status = Number(failure.status) || 0;
++    if (status === 429) return "rate_limited";
++    if (status === 401) return "login_required";
++    return own.call(failureStates, failure.code) ? failureStates[failure.code] : "temporary_error";
++  }
+   function failureText(failure) {
+     if (!failure || typeof failure !== "object") return "";
+-    var message = failureTexts[failure.code] || failureTexts.access;
+-    if (failure.code === "access" && failure.status) message += " (HTTP " + failure.status + ")";
+-    return message;
++    var message = stateText[failureState(failure)], status = Number(failure.status) || 0;
++    return status > 0 ? message + " · HTTP " + status : message;
++  }
++  // The one state of a row. A failure or a missing answer is never "no public email".
++  function contactState(row) {
++    if (!row || typeof row !== "object") return "pending";
++    if (commercialEmail(row)) return "email_found";
++    if (row.loaded === false || row.detailLoaded === false) return row.contactFailure ? failureState(row.contactFailure) : "pending";
++    var status = row.emailStatus;
++    if (status === "profile_unavailable" || status === "identity_mismatch" || status === "no_user_id") return "profile_unavailable";
++    return "no_public_email";
+   }
+   function emailStatusText(row) {
+-    if (commercialEmail(row)) return statusText.found;
+-    if (row && row.loaded && row.detailLoaded === false) return failureText(row.contactFailure) || "Aguardando consulta";
+-    if (row && (row.emailStatus === "source_not_verified" || (row.email && !commercialEmail(row)))) return statusText.source_not_verified;
++    var state = contactState(row);
++    if (state === "email_found") return stateText.email_found;
++    if (state === "pending") return stateText.pending;
++    if (state === "rate_limited" || state === "login_required" || state === "access_denied" || state === "temporary_error") return failureText(row.contactFailure) || stateText[state];
+     var status = row && row.emailStatus;
+-    return status && status !== "found" && own.call(statusText, status) ? statusText[status] : statusText.not_returned;
++    if (state === "profile_unavailable") return own.call(statusText, status) ? statusText[status] : stateText.profile_unavailable;
++    if (row && (status === "source_not_verified" || (row.email && !commercialEmail(row)))) return statusText.source_not_verified;
++    return status && status !== "found" && own.call(statusText, status) ? statusText[status] : stateText.no_public_email;
+   }
+   function commercialRow(row) {
+     var copy = Object.assign({}, row), email = commercialEmail(row);
+@@ -183,23 +212,27 @@
+     }
+     return "";
+   }
+-  function profileFromResponse(response, expectedId, expectedUsername) {
+-    // Known profile envelopes only. Never inspect data.viewer or suggested users.
+-    var paths = ["data.data.user", "data.user", "user",
+-      "data.data.xdt_api__v1__users__web_profile_info.user",
+-      "data.xdt_api__v1__users__web_profile_info.user",
+-      "data.data.xdt_api__v1__users__web_profile_info",
+-      "data.xdt_api__v1__users__web_profile_info"];
+-    for (var i = 0; i < paths.length; i++) {
+-      var user = at(response, paths[i]);
+-      if (!user || typeof user !== "object" || Array.isArray(user)) continue;
+-      var id = text(user.pk || user.id), username = text(user.username);
+-      if (!id && !username) continue;
+-      if (expectedId && id && id !== text(expectedId)) continue;
+-      if (expectedUsername && username && username.toLowerCase() !== text(expectedUsername).toLowerCase()) continue;
+-      return user;
++  // Envelopes of the profile detail answer, relative to an axios-style response
++  // ({ data: body }): body.user, body.data.user and body.items[0].user, or the body itself.
++  // Never data.viewer, suggested users or comment authors.
++  var profilePaths = ["data.user", "data.data.user", "data.items.0.user", "user", "items.0.user"];
++  function locateProfile(response, expectedId, expectedUsername) {
++    for (var i = 0; i < profilePaths.length; i++) {
++      var parts = profilePaths[i].split("."), parent = parts.length > 1 ? at(response, parts.slice(0, -1).join(".")) : response;
++      if (!parent || typeof parent !== "object" || !own.call(parent, "user")) continue;
++      var user = parent.user;
++      // The envelope is known; an explicit null or non-object user means the profile is gone.
++      if (!user || typeof user !== "object" || Array.isArray(user)) return { known: true, path: profilePaths[i], user: null, mismatch: false };
++      var id = text(user.pk != null ? user.pk : (user.pk_id != null ? user.pk_id : user.id)), username = text(user.username);
++      var mismatch = !!((expectedId && id && id !== text(expectedId)) ||
++        (expectedUsername && username && username.toLowerCase() !== text(expectedUsername).toLowerCase()));
++      return { known: true, path: profilePaths[i], user: user, mismatch: mismatch };
+     }
+-    return null;
++    return { known: false, path: "", user: null, mismatch: false };
++  }
++  function profileFromResponse(response, expectedId, expectedUsername) {
++    var found = locateProfile(response, expectedId, expectedUsername);
++    return found.user && !found.mismatch ? found.user : null;
+   }
+   function linkContacts(value) {
+     var result = { email: "", phone: "" }, raw = text(value);
+@@ -225,8 +258,7 @@
+     var visible = !hidden(user.should_show_public_contacts);
+     var result = { email: contact.email, phone: "", emailSource: contact.source, phoneSource: "", biography: bio,
+       emailStatus: contact.status, phoneStatus: visible ? "not_returned" : "not_published",
+-      profileType: contact.profileType, emailFieldReturned: contact.fieldReturned, emailKeys: contact.keys,
+-      contactWithheld: false };
++      profileType: contact.profileType, emailFieldReturned: contact.fieldReturned, emailKeys: contact.keys };
+     if (visible) {
+       phoneFields.forEach(function (field) {
+         if (own.call(user, field)) result.phoneStatus = "not_published";
+@@ -285,7 +317,8 @@
+     } }, publicContactResult: contacts };
+   }
+   return { extract: extract, classifyEmail: classifyEmail, profileType: profileType, emailFields: emailFields.slice(),
+-    profileFromResponse: profileFromResponse, toDetailResponse: toDetailResponse,
++    profileFromResponse: profileFromResponse, locateProfile: locateProfile, profilePaths: profilePaths.slice(), toDetailResponse: toDetailResponse,
++    contactState: contactState, failureState: failureState, stateText: stateText,
+     validEmail: validEmail, validPhone: validPhone, emailInText: emailInText, phoneInText: phoneInText, linkContacts: linkContacts,
+     commercialEmail: commercialEmail, commercialRow: commercialRow, emailStatusText: emailStatusText,
+     failureText: failureText, statusText: statusText };
+--- 15.3/commercial-profile-reader.js
++++ 15.4/commercial-profile-reader.js
+@@ -1,7 +1,11 @@
+-/* PATCHED 14-15.3: one ordinary web_profile_info request per profile, serial and
+- * fail closed. Every real response is summarised (field names, profile flags,
+- * masked email) so the commercial-contact field can be verified, not guessed.
+- * A live public commercial contact has not yet been confirmed.
++/* PATCHED 15.4: one /api/v1/users/{id}/info/ answer per profile id, serial and fail closed.
++ * This module never builds a request. It asks for the extension's own shared profile-detail
++ * request (deps.request, the same function every mode uses) and decides what the answer means:
++ * an email found in the Instagram response, "no public email" (HTTP 200 with the real profile
++ * object only), or an access failure that is never read as "no email". It also keeps the shared
++ * 429 pause, the adaptive spacing and a persistent cache by user id, and records a sanitised log
++ * (field paths and value types, masked email; never cookies, tokens or headers).
++ * A live public commercial email has not yet been confirmed by a real response.
+  */
+ (function (root, factory) {
+   var api = factory();
+@@ -9,7 +13,7 @@
+   else root.IGCommercialProfileReader = api;
+ })(typeof window !== "undefined" ? window : globalThis, function () {
+   "use strict";
+-  var endpoint = "instagram_web_profile_info";
++  var endpoint = "instagram_users_info";
+   var cooldownKey = "ig_contact_cooldown_until";
+   var schemaKey = "ig_commercial_contact_schema_v14";
+   var evidenceKey = "ig_commercial_contact_evidence_v14";
+@@ -17,19 +21,18 @@
+   // Adaptive spacing between profile requests, shared by every dashboard.
+   var pacingKey = "ig_contact_pacing";
+   var baseSpacing = 10000, maxSpacing = 120000;
+-  // Answered profiles, kept across extractions so the same profile is not asked twice.
+-  var profileCacheKey = "ig_contact_profile_cache_v15";
+-  var cacheTtl = 14 * 864e5, missingTtl = 3 * 864e5, cacheLimit = 3000;
++  // Answered profiles by user id, kept across extractions so no profile is asked twice.
++  var profileCacheKey = "ig_contact_profile_cache_v154";
++  var ttlFound = 14 * 864e5, ttlNone = 7 * 864e5, ttlUnavailable = 3 * 864e5, cacheLimit = 3000;
+   var lockName = "ig-commercial-profile-read";
+   // Every read-modify-write of the shared pause goes through this lock, in the reader
+   // and in the dashboard, so two tabs can never shorten each other's pause.
+   var cooldownLock = "ig-contact-cooldown";
+   var own = Object.prototype.hasOwnProperty;
+-  var professionalTypes = ["business", "creator", "professional"];
+-  // The omission/withheld limits are kept only so older saved schemas still parse.
+-  var omittedProfessionalLimit = 3, withheldProfessionalLimit = 3, refusedLimit = 2, evidenceLimit = 20, listLimit = 10;
++  var refusedLimit = 2, evidenceLimit = 20, listLimit = 10;
+   var flagFields = ["account_type", "is_business_account", "is_professional_account", "is_business",
+     "should_show_public_contacts", "business_contact_method", "is_private"];
++  var loginPattern = /login_required|checkpoint_required|challenge_required|consent_required|please log ?in|sessionid/i;
+ 
+   function retryUntil(value, now) {
+     var raw = String(value == null ? "" : value).trim();
+@@ -62,16 +65,13 @@
+     return at > 0 ? s.charAt(0) + "***" + s.slice(at) : "";
+   }
+   function readSchema(value) {
+-    var schema = { endpoint: endpoint, keysPresent: 0, keysPresentUsers: [], omittedProfessional: [], omittedOther: 0,
+-      found: 0, foundUsers: [], withheldProfessional: [], responses: 0, profiles: 0, refusals: 0, lastRefusalAt: 0, firstFound: null, updatedAt: 0 };
++    var schema = { endpoint: endpoint, keysPresent: 0, keysPresentUsers: [], omittedOther: 0,
++      found: 0, foundUsers: [], responses: 0, profiles: 0, refusals: 0, lastRefusalAt: 0, firstFound: null, updatedAt: 0 };
+     if (!value || typeof value !== "object" || value.endpoint !== endpoint) return schema;
+     schema.keysPresent = Number(value.keysPresent) || 0;
+     schema.omittedOther = Number(value.omittedOther) || 0;
+     schema.found = Number(value.found) || 0;
+-    // Older PATCHED 14 schemas have no counter: infer a lower bound from the
+-    // per-profile tallies so earlier answers are not read as "never answered".
+-    schema.responses = Number(value.responses) ||
+-      (schema.keysPresent + schema.omittedOther + (Array.isArray(value.omittedProfessional) ? value.omittedProfessional.length : 0));
++    schema.responses = Number(value.responses) || 0;
+     schema.profiles = Number(value.profiles) || 0;
+     schema.refusals = Number(value.refusals) || 0;
+     schema.lastRefusalAt = Number(value.lastRefusalAt) || 0;
+@@ -80,20 +80,16 @@
+         email: String(value.firstFound.email || ""), probe: !!value.firstFound.probe };
+     }
+     schema.updatedAt = Number(value.updatedAt) || 0;
+-    ["keysPresentUsers", "omittedProfessional", "foundUsers", "withheldProfessional"].forEach(function (key) {
++    ["keysPresentUsers", "foundUsers"].forEach(function (key) {
+       schema[key] = Array.isArray(value[key]) ? value[key].slice(-listLimit) : [];
+     });
+     return schema;
+   }
+-  // PATCHED 15.3: profiles without an email never stop the queue (each row keeps its own
+-  // status). Only access failures (429, 403, login...) pause it. Kept for compatibility.
+-  function blockReason() { return ""; }
+   // Diagnostic only: repeated refusals with no profile answer at all.
+   function routeRefusing(value) {
+     var schema = readSchema(value);
+     return schema.responses === 0 && schema.refusals >= refusedLimit;
+   }
+-  function unsupported(value) { return !!blockReason(value); }
+   function valueType(value) {
+     if (value === null || value === undefined) return "null";
+     if (typeof value === "string") return value.trim() ? "texto" : "vazio";
+@@ -114,18 +110,23 @@
+     })(body, "", 0);
+     return out;
+   }
++  function header(headers, name) {
++    if (!headers) return null;
++    if (typeof headers.get === "function") return headers.get(name);
++    var found = null;
++    Object.keys(headers).forEach(function (key) { if (key.toLowerCase() === name) found = headers[key]; });
++    return found;
++  }
++  function validId(value) { return /^\d{1,20}$/.test(String(value || "")); }
+   function remember(list, username) {
+     return list.indexOf(username) >= 0 ? list : list.concat(username).slice(-listLimit);
+   }
+-  function locate(body) {
+-    // web_profile_info envelope, as in the extension's ApiProfileInfo config: { data: { user } }.
+-    var data = body && typeof body === "object" ? body.data : null;
+-    if (!data || typeof data !== "object" || !own.call(data, "user")) return { known: false, user: null };
+-    var user = data.user;
+-    return { known: true, user: user && typeof user === "object" && !Array.isArray(user) ? user : null };
++  // Envelope paths as the answer is shown in the diagnostics (relative to the JSON body).
++  function displayPath(path) {
++    return { "data.user": "user", "data.data.user": "data.user", "data.items.0.user": "items[0].user" }[path] || path;
+   }
+   function create(deps) {
+-    var cache = new Map();
++    var memory = new Map();
+     function readPacing(saved) {
+       var p = saved && saved[pacingKey] && typeof saved[pacingKey] === "object" ? saved[pacingKey] : {};
+       var spacing = Math.min(maxSpacing, Math.max(baseSpacing, Number(p.spacing) || baseSpacing));
+@@ -143,21 +144,31 @@
+         return deps.storage.set({ [pacingKey]: p });
+       }).catch(function () {});
+     }
+-    function cachedProfile(saved, username, userId) {
+-      var all = saved && saved[profileCacheKey] && typeof saved[profileCacheKey] === "object" ? saved[profileCacheKey] : {};
+-      var hit = all[endpoint + ":" + username];
++    function cacheOf(saved) {
++      return saved && saved[profileCacheKey] && typeof saved[profileCacheKey] === "object" ? saved[profileCacheKey] : {};
++    }
++    function cachedProfile(saved, userId) {
++      var hit = cacheOf(saved)[userId];
+       if (!hit || !hit.result || typeof hit.result !== "object") return null;
+-      var ttl = hit.result.contactSkip ? missingTtl : cacheTtl;
+-      if (!(Number(hit.at) > deps.now() - ttl)) return null;
+-      // A username can move to another account: only the same id may reuse it.
+-      if (userId && hit.userId && hit.userId !== userId) return null;
+-      return hit.result;
++      var ttl = hit.kind === "unavailable" ? ttlUnavailable : hit.kind === "none" ? ttlNone : ttlFound;
++      return Number(hit.at) > deps.now() - ttl ? hit.result : null;
+     }
+-    function storeProfile(username, userId, result) {
++    // A comment without a usable id: the id may already be known from an earlier answer.
++    // Never a request: that profile is not asked again by any other route.
++    function idFromCache(saved, username) {
++      if (!username) return "";
++      var all = cacheOf(saved), best = null;
++      Object.keys(all).forEach(function (id) {
++        var hit = all[id];
++        if (hit && hit.username === username && validId(id) && (!best || Number(hit.at) > best.at)) best = { id: id, at: Number(hit.at) };
++      });
++      return best ? best.id : "";
++    }
++    function storeProfile(userId, username, result) {
+       if (!result || result.contactOutcome === "identity_mismatch") return Promise.resolve();
+       return Promise.resolve(deps.storage.get(profileCacheKey)).then(function (saved) {
+-        var all = saved && saved[profileCacheKey] && typeof saved[profileCacheKey] === "object" ? saved[profileCacheKey] : {};
+-        all[endpoint + ":" + username] = { at: deps.now(), userId: String(result.contactUserId || userId || ""), result: result };
++        var all = cacheOf(saved);
++        all[userId] = { at: deps.now(), username: username, kind: result.contactSkip ? "unavailable" : (result.contactOutcome === "found" ? "found" : "none"), result: result };
+         var keys = Object.keys(all);
+         if (keys.length > cacheLimit) keys.sort(function (a, b) { return (all[a].at || 0) - (all[b].at || 0); })
+           .slice(0, keys.length - cacheLimit).forEach(function (k) { delete all[k]; });
+@@ -167,7 +178,7 @@
+     // Only the saved 429 pause closes the queue; a profile without an email never does.
+     function assertOpen(saved) {
+       if (Number(saved[cooldownKey]) > deps.now()) {
+-        var cooldown = stopped("O Instagram está em pausa. Aguarde o horário indicado.", "cooldown");
++        var cooldown = stopped("Consulta pausada pelo Instagram. Aguarde o horário indicado.", "cooldown");
+         cooldown.cooldownUntil = Number(saved[cooldownKey]);
+         throw cooldown;
+       }
+@@ -189,11 +200,7 @@
+         if (contact.emailFieldReturned) {
+           schema.keysPresent += 1;
+           schema.keysPresentUsers = remember(schema.keysPresentUsers, username);
+-        } else if (contact.emailStatus === "omitted" && professionalTypes.indexOf(contact.profileType) >= 0) {
+-          schema.omittedProfessional = remember(schema.omittedProfessional, username);
+-        } else {
+-          schema.omittedOther += 1;
+-        }
++        } else schema.omittedOther += 1;
+         schema.updatedAt = deps.now();
+         return deps.storage.set({ [schemaKey]: schema }).then(function () { return schema; });
+       });
+@@ -206,107 +213,112 @@
+           schema.responses += 1;
+           if (kind === "profile") schema.profiles += 1;
+           schema.refusals = 0;
+-        }
+-        else { schema.refusals += 1; schema.lastRefusalAt = deps.now(); }
++        } else { schema.refusals += 1; schema.lastRefusalAt = deps.now(); }
+         schema.updatedAt = deps.now();
+         return deps.storage.set({ [schemaKey]: schema }).then(function () { return schema; });
+       });
+     }
+-    function skip(outcome, entry) {
++    function skip(outcome, entry, userId) {
+       entry.outcome = outcome;
+-      return { contactSkip: true, contactOutcome: outcome, contactEndpoint: endpoint };
++      return { contactSkip: true, contactOutcome: outcome, contactEndpoint: endpoint, contactRoute: "users_info", contactUserId: userId || "" };
++    }
++    function failure(entry, state, code, message, status) {
++      entry.outcome = state;
++      return stopped(message, code, status ? { status: status } : null);
++    }
++    // Why the answer was refused: a login/challenge page or message is a session problem;
++    // any other refusal is access denied. Neither is ever "no email".
++    function refused(entry, status, message) {
++      if (status === 401 || loginPattern.test(message || "")) {
++        return failure(entry, "login_required", "login_required", "Sessão precisa ser verificada: o Instagram pediu login ou verificação" + (message ? " (" + message + ")" : "") + ". Abra o instagram.com, confirme a sessão e clique em Continue. Nada é repetido automaticamente.", status);
++      }
++      return failure(entry, "access_denied", "access_denied", "O Instagram negou o acesso a esta consulta (HTTP " + status + (message ? ": " + message : "") + "). Coleta pausada, sem nova tentativa automática.", status);
+     }
+-    async function fetchProfile(username, userId, entry) {
+-      var controller = new AbortController();
+-      var timer = setTimeout(function () { controller.abort(); }, 30000);
+-      var response, raw;
++    async function fetchProfile(userId, username, entry) {
++      var response, timer;
+       try {
+-        try {
+-          response = await deps.fetch("https://www.instagram.com/api/v1/users/web_profile_info/?username=" + encodeURIComponent(username), {
+-            method: "GET", credentials: "include", redirect: "manual", cache: "no-store", signal: controller.signal,
+-            headers: { Accept: "application/json", "X-IG-App-ID": "936619743392459", "X-Requested-With": "XMLHttpRequest" }
+-          });
+-        } catch (err) {
+-          entry.outcome = "network";
+-          throw stopped("Falha de rede ou tempo esgotado na consulta de contato. Coleta pausada, sem nova tentativa automática.", "network");
+-        }
+-        entry.http = response.status;
+-        // Not followed: a login or checkpoint redirect is an access failure.
+-        if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+-          entry.outcome = "redirect";
+-          throw stopped("O Instagram redirecionou a consulta (login ou verificação). Coleta pausada, sem nova tentativa automática.", "redirect", { status: response.status });
+-        }
+-        if (response.status === 429) {
+-          entry.retryAfter = response.headers.get("retry-after");
+-          var until = retryUntil(entry.retryAfter, deps.now());
+-          // Storage may fail (invalidated context); the pause must still be reported.
+-          try {
+-            until = await saveCooldown(deps.storage, deps.locks, until, deps.wait);
+-            entry.cooldownSaved = true;
+-          } catch (storageError) { entry.cooldownSaved = false; }
+-          entry.outcome = "rate_limit";
+-          entry.cooldownUntil = until;
+-          var limited = stopped("O Instagram limitou as consultas (HTTP 429). Coleta pausada até o horário indicado, sem nova tentativa automática.", "rate_limit", {
+-            status: 429, headers: { "retry-after": new Date(until).toUTCString() }
+-          });
+-          limited.cooldownUntil = until;
+-          throw limited;
+-        }
+-        try { raw = await response.text(); } catch (err) {
+-          entry.outcome = "network";
+-          throw stopped("Falha de rede ou tempo esgotado na consulta de contato. Coleta pausada, sem nova tentativa automática.", "network");
+-        }
++        response = await new Promise(function (resolve, reject) {
++          timer = setTimeout(function () { reject(new Error("timeout")); }, 30000);
++          Promise.resolve().then(function () { return deps.request(userId); }).then(resolve, reject);
++        });
++      } catch (err) {
++        throw failure(entry, "temporary_error", "network", "Falha temporária de rede ou tempo esgotado na consulta do perfil. Coleta pausada; clique em Continue para tentar de novo.", 0);
+       } finally { clearTimeout(timer); }
+-      var body = null;
+-      try { body = JSON.parse(raw); } catch (err) { body = null; }
+-      if (body && typeof body === "object") entry.emailPaths = emailPaths(body);
++      var status = Number(response && response.status) || 0, body = response ? response.data : null;
++      entry.http = status;
++      if (status === 429) {
++        entry.retryAfter = header(response.headers, "retry-after");
++        var until = retryUntil(entry.retryAfter, deps.now());
++        // Storage may fail (invalidated context); the pause must still be reported.
++        try {
++          until = await saveCooldown(deps.storage, deps.locks, until, deps.wait);
++          entry.cooldownSaved = true;
++        } catch (storageError) { entry.cooldownSaved = false; }
++        entry.outcome = "rate_limited";
++        entry.cooldownUntil = until;
++        var limited = stopped("Consulta pausada pelo Instagram (HTTP 429). Coleta pausada até o horário indicado, sem nova tentativa automática.", "rate_limit", {
++          status: 429, headers: { "retry-after": new Date(until).toUTCString() }
++        });
++        limited.cooldownUntil = until;
++        throw limited;
++      }
+       // Instagram's text ends up in HTML notifications: keep it inert and short.
+       var message = body && typeof body === "object" && typeof body.message === "string"
+         ? body.message.replace(/[<>&"']/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) : "";
+       if (message) entry.message = message;
+-      if (response.status === 404) {
++      if (status === 404) {
+         entry.envelope = true;
+-        return skip("profile_unavailable", entry);
++        return skip("profile_unavailable", entry, userId);
+       }
+-      if (!response.ok) {
+-        entry.outcome = "access";
+-        throw stopped("O Instagram recusou a consulta de contato (HTTP " + response.status + (message ? ": " + message : "") + "). Coleta pausada, sem nova tentativa automática.", "access", { status: response.status });
+-      }
+-      if (!body || typeof body !== "object") {
+-        entry.outcome = "invalid_response";
+-        throw stopped("O Instagram devolveu uma página em vez de dados (possível login ou verificação). Coleta pausada, sem nova tentativa automática.", "invalid_response", { status: response.status });
++      if (status < 200 || status >= 300) {
++        if (status >= 500) throw failure(entry, "temporary_error", "temporary", "O Instagram respondeu com erro temporário (HTTP " + status + "). Coleta pausada; clique em Continue para tentar de novo.", status);
++        throw refused(entry, status, message);
+       }
++      if (typeof body === "string") {
++        // A page instead of data: the session was sent to login or a verification page.
++        if (/^\s*</.test(body)) throw refused(entry, status, "login_required");
++        throw failure(entry, "temporary_error", "unexpected_response", "A resposta do Instagram não é um JSON de perfil. Coleta pausada; nenhum perfil foi marcado como sem e-mail.", status);
++      }
++      if (!body || typeof body !== "object" || Array.isArray(body)) {
++        throw failure(entry, "temporary_error", "unexpected_response", "A resposta do Instagram veio vazia ou inválida. Coleta pausada; nenhum perfil foi marcado como sem e-mail.", status);
++      }
++      entry.emailPaths = emailPaths(body);
+       if (body.status === "fail" || body.require_login || (Array.isArray(body.errors) && body.errors.length)) {
+-        entry.outcome = "access";
+-        throw stopped("O Instagram não autorizou a consulta de perfil" + (message ? " (" + message + ")" : "") + ". Coleta pausada, sem nova tentativa automática.", "access", { status: response.status });
++        throw refused(entry, status, body.require_login ? "login_required" : message);
+       }
+-      var located = locate(body);
++      // Only the envelopes the extension really receives: user, data.user, items[0].user.
++      var located = deps.contacts.locateProfile({ data: body }, userId, "");
+       entry.envelope = located.known;
+       entry.profilePayload = !!located.user;
+       if (!located.known) {
+-        entry.outcome = "unexpected_response";
+-        throw stopped("A resposta do Instagram veio num formato desconhecido. Coleta pausada, sem nova tentativa automática.", "unexpected_response", { status: response.status });
++        throw failure(entry, "temporary_error", "unexpected_response", "A resposta do Instagram veio num formato desconhecido (user, data.user ou items[0].user não encontrados). Coleta pausada; nenhum perfil foi marcado como sem e-mail.", status);
+       }
+-      // Missing or renamed profiles are per-row results, not session failures.
+-      if (!located.user) return skip("profile_unavailable", entry);
++      // A deleted or renamed-away profile is a per-row result, not a session failure.
++      if (!located.user) return skip("profile_unavailable", entry, userId);
+       var user = located.user;
+-      var returnedName = String(user.username || "").toLowerCase(), returnedId = String(user.pk || user.id || "");
+-      if (returnedName !== username || (userId && returnedId && returnedId !== userId)) {
+-        entry.returnedUsername = returnedName.slice(0, 40);
+-        var mismatch = skip("identity_mismatch", entry);
++      var returnedId = String(user.pk != null ? user.pk : (user.pk_id != null ? user.pk_id : (user.id != null ? user.id : "")));
++      if (located.mismatch || !returnedId) {
++        entry.returnedId = returnedId.slice(0, 20);
++        if (!returnedId) throw failure(entry, "temporary_error", "unexpected_response", "A resposta do Instagram não traz o id do perfil; ela não foi aplicada.", status);
++        var mismatch = skip("identity_mismatch", entry, userId);
+         mismatch.contactUserId = returnedId;
+         return mismatch;
+       }
+       var detail = deps.contacts.toDetailResponse(user, username), contact = detail.publicContactResult, flags = {};
+       flagFields.forEach(function (key) { if (own.call(user, key)) flags[key] = user[key]; });
++      var shown = displayPath(located.path);
+       entry.outcome = contact.emailStatus;
++      entry.state = contact.emailStatus === "found" ? "email_found" : "no_public_email";
+       entry.profileType = contact.profileType;
+       entry.keys = contact.emailKeys;
+       entry.flags = flags;
++      entry.path = shown;
++      entry.emailField = contact.emailStatus === "found" ? shown + "." + contact.emailSource : shown + ".public_email";
++      entry.decision = contact.emailStatus === "found" ? "email_found (" + contact.emailSource + ")" : "no_public_email (" + contact.emailStatus + ")";
+       entry.userKeys = Object.keys(user).sort().slice(0, 300);
+       entry.email = maskEmail(contact.email);
+-      entry.withheld = !!contact.contactWithheld;
+       detail.contactEndpoint = endpoint;
++      detail.contactRoute = "users_info";
+       detail.contactUserId = returnedId;
+       detail.contactOutcome = contact.emailStatus;
+       detail.commercialContactFieldReturned = contact.emailFieldReturned;
+@@ -315,90 +327,77 @@
+       detail.contactFlags = flags;
+       return detail;
+     }
+-    function decided(result, schemaValue, fromCache) {
++    function decided(result, fromCache) {
+       var copy = Object.assign({}, result);
+-      copy.commercialSchemaUnsupported = unsupported(schemaValue);
+-      copy.commercialSchema = readSchema(schemaValue);
+       if (fromCache) copy.fromCache = true;
+       return copy;
+     }
+     return async function read(userId, username, isCurrent, options) {
+       var probe = !!(options && options.probe);
++      userId = String(userId == null ? "" : userId).trim();
+       username = String(username || "").trim().replace(/^@/, "").toLowerCase();
+-      userId = String(userId || "");
+-      if (!/^[a-z0-9_](?:[a-z0-9_.]{0,28}[a-z0-9_])?$/.test(username)) {
+-        throw stopped("Nome de perfil inválido. A consulta foi interrompida.", "identity");
+-      }
+       if (!deps.locks || typeof deps.locks.request !== "function") {
+         throw stopped("Não foi possível controlar a fila de consultas. Coleta pausada.", "lock");
+       }
+       var active = function () { return !isCurrent || isCurrent(); };
+-      // Keyed by username only: the queue and the manual check must share one
+-      // response, so the same profile is never requested twice in a page.
+-      var cacheKey = username;
+-      var usable = function (saved) {
+-        if (!saved) return false;
+-        // A mismatch says "this username did not answer for that id": reuse it
+-        // only for the same request, never for the id that came back.
+-        if (saved.contactOutcome === "identity_mismatch") return saved.requestedUserId === userId;
+-        return !userId || !saved.contactUserId || saved.contactUserId === userId;
+-      };
+       return deps.locks.request(lockName, async function () {
+         try {
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+           var saved = await deps.storage.get([cooldownKey, schemaKey, lastStartKey, pacingKey, profileCacheKey]);
+           assertOpen(saved);
+-          if (cache.has(cacheKey) && usable(cache.get(cacheKey))) return decided(cache.get(cacheKey), saved[schemaKey], true);
++          if (!validId(userId)) {
++            var known = idFromCache(saved, username);
++            // No id, none known: the row says so and no other route is tried.
++            if (!known) return decided(skip("no_user_id", { }, ""), false);
++            userId = known;
++          }
++          if (!probe && memory.has(userId)) return decided(memory.get(userId), true);
+           // Answered before (this or another extraction): no new request for the same profile.
+-          var stored = probe ? null : cachedProfile(saved, username, userId);
+-          if (stored) { cache.set(cacheKey, stored); return decided(stored, saved[schemaKey], true); }
++          var stored = probe ? null : cachedProfile(saved, userId);
++          if (stored) { memory.set(userId, stored); return decided(stored, true); }
+           var delay = Math.max(0, Number(saved[lastStartKey]) + readPacing(saved).spacing - deps.now());
+           if (delay) await deps.wait(delay);
+-          // Another dashboard can save a cooldown or a decision while this reader waits.
++          // Another dashboard can save a cooldown while this reader waits.
+           saved = await deps.storage.get([cooldownKey, schemaKey]);
+           assertOpen(saved);
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+           await deps.storage.set({ [lastStartKey]: deps.now() });
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+-          var entry = { at: deps.now(), endpoint: endpoint, username: username, probe: probe, http: null, outcome: "" };
++          var entry = { at: deps.now(), endpoint: endpoint, route: "GET /api/v1/users/{id}/info/", username: username, userId: userId, probe: probe, http: null, outcome: "" };
+           var result;
+-          try { result = await fetchProfile(username, userId, entry); }
+-          catch (failure) {
+-            var refusal = failure && (failure.stopCode === "rate_limit" ||
+-              (failure.stopCode === "access" && failure.response && failure.response.status === 400));
++          try { result = await fetchProfile(userId, username, entry); }
++          catch (failed) {
++            var refusal = failed && (failed.stopCode === "rate_limit" || (failed.stopCode === "access_denied" && failed.response && failed.response.status === 400));
+             if (refusal) {
+               await updatePacing(false);
+               var after = await noteOutcome("refusal");
+               // Diagnostic signal only: the pause and the manual restart are unchanged.
+               if (routeRefusing(after)) {
+-                failure.routeRefusing = true;
+-                failure.refusalCount = after.refusals;
++                failed.routeRefusing = true;
++                failed.refusalCount = after.refusals;
+               }
+             }
+-            throw failure;
++            throw failed;
+           }
+           finally { await record(entry); }
+           // 404 proves the route answers; only a parsed user object is a profile.
+           if (entry.envelope) { await noteOutcome(entry.profilePayload ? "profile" : "response"); await updatePacing(true); }
+-          var schemaValue = saved[schemaKey];
+-          if (!result.contactSkip) schemaValue = await updateSchema(username, result.publicContactResult, probe);
+-          else schemaValue = (await deps.storage.get(schemaKey))[schemaKey];
++          if (!result.contactSkip) await updateSchema(username, result.publicContactResult, probe);
+           // Cache before the cancellation check so a resume never repeats this request.
+-          result.requestedUserId = userId;
+-          cache.set(cacheKey, result);
+-          await storeProfile(username, userId, result);
++          memory.set(userId, result);
++          await storeProfile(userId, username, result);
+           if (!active()) throw stopped("Consulta cancelada.", "cancelled");
+-          return decided(result, schemaValue, false);
++          return decided(result, false);
+         } catch (error) {
+           if (error && error.commercialRequestStopped) throw error;
+-          throw stopped("Não foi possível concluir a consulta de contato. Coleta pausada, sem nova tentativa automática.", "request");
++          throw stopped("Não foi possível concluir a consulta do perfil. Coleta pausada, sem nova tentativa automática.", "request");
+         }
+       });
+     };
+   }
+-  return { create: create, retryUntil: retryUntil, unsupported: unsupported, readSchema: readSchema, maskEmail: maskEmail,
++  return { create: create, retryUntil: retryUntil, readSchema: readSchema, maskEmail: maskEmail,
+     saveCooldown: saveCooldown, cooldownLock: cooldownLock, stateSinceKey: "ig_contact_state_since",
+     pacingKey: pacingKey, profileCacheKey: profileCacheKey, emailPaths: emailPaths, baseSpacing: baseSpacing, maxSpacing: maxSpacing,
+-    blockReason: blockReason, routeRefusing: routeRefusing, endpoint: endpoint, cooldownKey: cooldownKey, schemaKey: schemaKey, evidenceKey: evidenceKey,
+-    omittedProfessionalLimit: omittedProfessionalLimit, withheldProfessionalLimit: withheldProfessionalLimit, refusedLimit: refusedLimit };
++    routeRefusing: routeRefusing, endpoint: endpoint, cooldownKey: cooldownKey, schemaKey: schemaKey, evidenceKey: evidenceKey,
++    refusedLimit: refusedLimit, lastStartKey: lastStartKey };
+ });
+--- 15.3/request-pacing.js
++++ 15.4/request-pacing.js
+@@ -1,4 +1,4 @@
+-/* Serial Instagram request spacing; no network operations. */
++/* Serial Instagram request spacing; no network operations. PATCHED 15.4. */
+ (function (root, factory) {
+   var api = factory();
+   if (typeof module === "object" && module.exports) module.exports = api;
+@@ -6,8 +6,9 @@
+ })(typeof window !== "undefined" ? window : globalThis, function () {
+   "use strict";
+   function intervals(value, type) {
++    // PATCHED 15.4: every mode, Comment included, uses the same /users/{id}/info/ request, so it
++    // keeps the same conservative 15-30 s default (the user's saved range still wins). 10 s is the floor.
+     var range = Array.isArray(value) ? value.slice(0, 2) : [15, 30];
+-    if (type === 4 && Number(range[0]) === 15 && Number(range[1]) === 30) range = [10, 15];
+     var low = Math.max(10, Number(range[0]) || 10);
+     return [low, Math.max(low, Number(range[1]) || 15)];
+   }
+--- 15.3/dashboard.js
++++ 15.4/dashboard.js
+@@ -226,16 +226,10 @@
+                             }, [t._v("Iniciar")])
+                           : t._e(),
+                         s("div", { staticClass: "is-flex is-justify-content-center is-align-items-center mb-2", staticStyle: { gap: "8px", "flex-wrap": "wrap" } }, [
+-                          s("input", {
+-                            staticClass: "input is-small", staticStyle: { "max-width": "300px" },
+-                            attrs: { type: "text", placeholder: "@perfil com Contato → E-mail visível no app", disabled: t.contactProbeRunning },
+-                            domProps: { value: t.contactProbeUsername },
+-                            on: { input: function (ev) { t.contactProbeUsername = ev.target.value; } }
+-                          }),
+                           s("b-button", {
+-                            attrs: { size: "is-small", type: "is-info", disabled: t.contactProbeRunning || (!t.isPaused && !t.isComplete) || t.retryAfterUntil > t.contactStatusNow },
+-                            on: { click: t.handleContactProbe }
+-                          }, [t._v(t.contactProbeRunning ? "Consultando..." : "Verificar 1 perfil")]),
++        attrs: { size: "is-small", type: "is-info", disabled: t.contactProbeRunning || !t.pendingContactCount || (!t.isPaused && !t.isComplete) || t.retryAfterUntil > t.contactStatusNow },
++        on: { click: t.handleContactProbe }
++      }, [t._v(t.contactProbeRunning ? "Consultando..." : "Validar 1 perfil pendente")]),
+                           s("b-button", {
+                             attrs: { size: "is-small", disabled: !t.contactEvidence.length },
+                             on: { click: t.handleCopyContactDiagnostic }
+@@ -3147,8 +3141,9 @@
+             skipCount: 0,
+             lastUpdateHistoryDataStr: "",
+             configs: {},
+-            lastExtractData: [],
++                        lastExtractData: [],
+             pendingExtractData: [],
++            queueReady: !1,
+             autoContinueTimer: null,
+             listenerUnloaded: !1,
+             localStorageExtractKeys: [],
+@@ -3173,7 +3168,7 @@
+             cooldownSaveFailed: false,
+             contactStateSince: 0,
+             commercialBlockReason: "",
+-            contactProbeUsername: "",
++            contactCardEpoch: -1,
+             contactProbeRunning: false,
+             contactClockTimer: null,
+             consecutiveUnavailableProfiles: 0,
+@@ -3210,6 +3205,10 @@
+               return true;
+             }).map(window.IGPublicContacts.commercialRow);
+           },
++                              pendingContactCount: function () {
++            // Rows with a user id still waiting for their one /users/{id}/info/ answer.
++            return this.followList.filter(function (row) { return row.loaded && row.detailLoaded === false && !!row.userId; }).length;
++          },
+           processedList: function () {
+             // What was really extracted, regardless of the DJ display filter. Comment rows are
+             // listed before their profile check, so in Comment mode only checked rows count.
+@@ -3245,14 +3244,13 @@
+             var names = function (list) { return list.length ? " (@" + list.join(", @") + ")" : ""; };
+             var lines = [
+               "Autland IG Extractor " + this.version,
+-              "Consulta: GET www.instagram.com/api/v1/users/web_profile_info/ (" + reader.endpoint + ")",
++              "Consulta: GET https://www.instagram.com/api/v1/users/{id}/info/ (" + reader.endpoint + ") · a mesma função de todos os modos, 1 consulta por perfil",
+               "Pausa salva no navegador: " + (this.storedCooldownUntil > this.contactStatusNow ? "até " + when(this.storedCooldownUntil) : "nenhuma ativa") +
+                 " · nesta aba: " + (this.retryAfterUntil > this.contactStatusNow ? "até " + when(this.retryAfterUntil) : "nenhuma") +
+                 (this.cooldownSaveFailed ? " · ATENÇÃO: a última pausa não pôde ser salva" : ""),
+               "Estado salvo neste navegador desde: " + when(this.contactStateSince) + " (pausa, contadores e respostas ficam no armazenamento da extensão; remover a extensão ou usar outro perfil do Chrome começa do zero)",
+               "Campo de e-mail presente em " + schema.keysPresent + " resposta(s)" + names(schema.keysPresentUsers) +
+-                "; omitido em " + schema.omittedProfessional.length + " perfil(is) profissional(is)" + names(schema.omittedProfessional) +
+-                "; outras respostas sem o campo: " + schema.omittedOther,
++      "; respostas de perfil sem o campo: " + schema.omittedOther,
+               "E-mails públicos entregues: " + schema.found + names(schema.foundUsers),
+               "Respostas desta consulta: " + schema.responses + " (perfis entregues: " + schema.profiles + "); recusas seguidas (HTTP 429/400): " + schema.refusals +
+                 (schema.lastRefusalAt ? " (última em " + when(schema.lastRefusalAt) + ")" : ""),
+@@ -3264,10 +3262,11 @@
+             this.contactEvidence.slice(0, 8).forEach(function (entry, i) {
+               var keys = entry.keys ? Object.keys(entry.keys).map(function (k) { return k + "=" + entry.keys[k]; }).join(" ") : "";
+               var flags = entry.flags ? Object.keys(entry.flags).map(function (k) { return k + "=" + entry.flags[k]; }).join(" ") : "";
+-              lines.push((i + 1) + ") " + when(entry.at) + " · @" + entry.username + (entry.probe ? " · verificação manual" : "") +
++              lines.push((i + 1) + ") " + when(entry.at) + " · @" + entry.username + (entry.probe ? " · validação manual" : "") +
+                 " · HTTP " + (null === entry.http || undefined === entry.http ? "-" : entry.http) + (429 === entry.http ? " · Retry-After=" + (entry.retryAfter ? entry.retryAfter : "ausente") : (entry.retryAfter ? " · Retry-After=" + entry.retryAfter : "")) +
+                 (false === entry.cooldownSaved ? " · pausa salva=NÃO" : "") +
+-                " · resultado=" + (entry.outcome || "-") + (entry.profileType ? " · tipo=" + entry.profileType : "") + (keys ? " · " + keys : "") +
++                " · resultado=" + (entry.outcome || "-") + (entry.state ? " · estado=" + entry.state : "") + (entry.decision ? " · decisão=" + entry.decision : "") +
++      (entry.emailField ? " · campo=" + entry.emailField : "") + (entry.profileType ? " · tipo=" + entry.profileType : "") + (keys ? " · " + keys : "") +
+                 (flags ? " · " + flags : "") + (entry.email ? " · e-mail=" + entry.email : "") + (entry.message ? " · mensagem=" + entry.message : "") +
+                 (Array.isArray(entry.emailPaths) ? " · campos de e-mail recebidos: " + (entry.emailPaths.length ? entry.emailPaths.join(", ") : "nenhum") : ""));
+             });
+@@ -3279,7 +3278,7 @@
+         created: function () {
+           var t = d.a.runtime.getManifest(),
+             e = t.version;
+-          (this.version = "v".concat(e) + " · PATCHED 15.3 · Diagnóstico do contato comercial (coleta não restaurada)"), this.startAfterSavedCooldown();
++          (this.version = "v".concat(e) + " · PATCHED 15.4 · E-mail comercial via /users/{id}/info/"), this.startAfterSavedCooldown();
+           var self = this;
+           // The panel's cooldown gates need a clock of their own: the DJ bar's
+           // ticker can be absent and must not decide when Iniciar re-enables.
+@@ -3314,13 +3313,13 @@
+               var hot = self.followList.filter(function(u){ return u.isHotLead; }).length;
+               var checked = self.followList.filter(function(u){ return u.detailLoaded; }).length;
+               self.contactStatusNow = Date.now();
+-              var counts = {};
+-              self.followList.forEach(function (u) { if (u.detailLoaded && u.emailStatus) counts[u.emailStatus] = (counts[u.emailStatus] || 0) + 1; });
+-              stat.textContent = self.type === 4
+-                ? total + ' perfis encontrados | ' + checked + ' consultados | ' + self.emailList.length + ' e-mails comerciais | vazios ' + ((counts.empty || 0) + (counts.not_delivered || 0)) +
+-                  ' · ocultos ' + (counts.hidden || 0) + ' · omitidos ' + (counts.omitted || 0) + ' · pessoais ' + (counts.not_professional || 0) +
+-                  ' · indisponíveis ' + ((counts.profile_unavailable || 0) + (counts.identity_mismatch || 0))
+-                : total + ' loaded | ' + hot + ' hot leads';
++                  var counts = {};
++    self.followList.forEach(function (u) { var st = window.IGPublicContacts.contactState(u); counts[st] = (counts[st] || 0) + 1; });
++    stat.textContent = self.type === 4
++      ? total + ' perfis encontrados | ' + checked + ' consultados | ' + (counts.email_found || 0) + ' e-mails comerciais | sem e-mail público ' + (counts.no_public_email || 0) +
++        ' · aguardando ' + (counts.pending || 0) + ' · indisponíveis ' + (counts.profile_unavailable || 0) +
++        ' · falhas ' + ((counts.rate_limited || 0) + (counts.login_required || 0) + (counts.access_denied || 0) + (counts.temporary_error || 0))
++      : total + ' loaded | ' + hot + ' hot leads';
+             }, 1500);
+           });
+ 
+@@ -4536,6 +4535,9 @@
+                                         has_next_page: !!r[2] && !!r[1] && r[1] !== t.pageInfo.end_cursor,
+                                       },
+                                       g = s.itemsDataKeys.split("|");
++                                    // A comment without user.pk: the id may sit in another field of the same item;
++                                    // if not, the username is its temporary key. No other request is ever made for it.
++                                    p = p.map(function (item) { return t.commenterWithId(item, g[0], g[1]); });
+                                     (p = k(p, g[0])),
+                                       (p = p.filter(function (e) {
+                                         return !t.followList.some(function (t) {
+@@ -4608,8 +4610,9 @@
+                                         };
+                                       })),
+                                       (t.pageInfo = m),
+-                                      p.length > 0 &&
+-                                        ((t.followList = t.followList.concat(p)), t.persistExtractRows()),
++                                      (t.queueReady = !0),
++                                      p.length > 0 && (t.followList = t.followList.concat(p)),
++                                      t.persistExtractRows(),
+                                       !t.pageInfo.has_next_page &&
+                                         (t.updateHistory(0 === t.followList.length ? { isFromComplete: !0 } : {}),
+                                         (document.body.scrollTop = 0),
+@@ -5392,18 +5395,37 @@
+               throw error;
+             });
+           },
++          requestUserInfoDetail: function (userId) {
++            // The one profile-detail request of the extension, for every mode: same URL template
++            // (ApiUserInfoDetail), same headers (the session's own csrf/claim) and same credentials.
++            return m.a.get(this.configs.ApiUserInfoDetail.url.replace("${@}$", userId), {
++              headers: this.configs.CustomHeaders,
++              withCredentials: true,
++            });
++          },
+           ensureCommercialReader: function () {
+-            if (!this.commercialProfileReader) this.commercialProfileReader = window.IGCommercialProfileReader.create({
++            var t = this;
++            if (!t.commercialProfileReader) t.commercialProfileReader = window.IGCommercialProfileReader.create({
+               contacts: window.IGPublicContacts,
+               storage: d.a.storage.local,
+               locks: navigator.locks,
+-              fetch: window.fetch.bind(window),
++              // The reader never builds its own request: it asks for the shared one above and
++              // only normalises the outcome (status, headers, body).
++              request: function (userId) {
++                return t.requestUserInfoDetail(userId).then(function (response) {
++                  return { status: response.status || 200, headers: response.headers || {}, data: response.data };
++                }, function (error) {
++                  var failed = error && error.response;
++                  if (failed) return { status: failed.status, headers: failed.headers || {}, data: failed.data };
++                  throw error;
++                });
++              },
+               now: Date.now,
+               wait: function (delay) { return new Promise(function (resolve) { setTimeout(resolve, delay); }); }
+             });
+-            return this.commercialProfileReader;
++            return t.commercialProfileReader;
+           },
+-          loadUserInfoDetailWebProfile: function (userId, username) {
++          loadUserInfoDetailContact: function (userId, username) {
+             var t = this, epoch = t.extractionEpoch, reader = t.ensureCommercialReader();
+             t.lastProfileRequestStartedAt = Date.now();
+             t.lastDetailFromCache = !1;
+@@ -5411,6 +5433,16 @@
+               return !t.isPaused && t.extractionEpoch === epoch;
+             }).then(function (result) {
+               t.lastDetailFromCache = !!(result && result.fromCache);
++              if (!t.lastDetailFromCache && result && !result.contactSkip && t.contactCardEpoch !== epoch) {
++                t.contactCardEpoch = epoch;
++                t.refreshCommercialEvidence().then(function () {
++                  var entry = (t.contactEvidence || []).filter(function (item) { return item && !item.probe && String(item.userId) === String(result.contactUserId || userId); })[0];
++                  if (entry) t.$buefy.notification.open({
++                    duration: 30000, position: "is-bottom-right", hasIcon: true, type: "found" === result.contactOutcome ? "is-success" : "is-info",
++                    message: t.contactCardText(entry, window.IGPublicContacts.statusText[result.contactOutcome] || result.contactOutcome)
++                  });
++                });
++              }
+               return result;
+             });
+           },
+@@ -5422,8 +5454,9 @@
+             if (Number(saved[reader.stateSinceKey])) this.contactStateSince = Number(saved[reader.stateSinceKey]);
+             this.contactSchema = reader.readSchema(saved[reader.schemaKey]);
+             this.contactEvidence = Array.isArray(saved[reader.evidenceKey]) ? saved[reader.evidenceKey] : [];
+-            this.commercialBlockReason = 4 === this.type ? reader.blockReason(saved[reader.schemaKey]) : "";
+-            this.commercialContactUnavailable = !!this.commercialBlockReason;
++            // A profile without an email never closes the queue: only the saved 429 pause does.
++            this.commercialBlockReason = "";
++            this.commercialContactUnavailable = !1;
+           },
+           refreshCommercialEvidence: function () {
+             var self = this, reader = window.IGCommercialProfileReader;
+@@ -5435,16 +5468,16 @@
+           },
+           commercialStatusMessage: function () {
+             if (this.retryAfterUntil > this.contactStatusNow) return "Coleta pausada até " + new Date(this.retryAfterUntil).toLocaleString() + " (limite do Instagram). Nenhuma nova tentativa automática.";
+-            if (this.commercialStartRequired) return "Pronto para coletar o e-mail do botão Contato. Nada é consultado antes de Iniciar.";
++            if (this.commercialStartRequired) return "Pronto para coletar o e-mail comercial público. Nada é consultado antes de Iniciar.";
+             if (this.isComplete) return "Coleta concluída. Nenhuma consulta em andamento.";
+-            return this.isPaused ? "Coleta pausada. Nenhuma nova tentativa automática." : "Coleta em andamento: 1 perfil por vez, intervalo mínimo de 10 s.";
++            return this.isPaused ? "Coleta pausada. Nenhuma nova tentativa automática." : "Coleta em andamento: 1 perfil por vez (/users/{id}/info/), intervalo adaptativo, pausa no primeiro 429.";
+           },
+           notifyCommercialRefusal: function (error) {
+             this.$buefy.notification.open({
+               indefinite: true, position: "is-bottom-right", type: "is-warning", hasIcon: true,
+               message: error.routeRefusing
+-                ? "Diagnóstico automático: " + error.refusalCount + " recusas seguidas do Instagram e nenhuma resposta de perfil até agora nesta instalação. Pode não ser só ritmo — uma verificação pendente no app (checkpoint) ou a indisponibilidade desta consulta para contas logadas também produzem recusa. A pausa é respeitada e nada é repetido automaticamente; depois dela você pode tentar de novo pelo botão de iniciar/continuar ou com “Verificar 1 perfil”."
+-                : "O Instagram recusou esta consulta. A pausa indicada é respeitada e nada é repetido automaticamente; depois dela você pode tentar de novo pelo botão de iniciar/continuar ou com “Verificar 1 perfil”."
++                ? "Diagnóstico automático: " + error.refusalCount + " recusas seguidas do Instagram e nenhuma resposta de perfil até agora nesta instalação. Pode não ser só ritmo — uma verificação pendente no app (checkpoint) ou a indisponibilidade desta consulta para contas logadas também produzem recusa. A pausa é respeitada e nada é repetido automaticamente; depois dela você pode continuar pelo botão de iniciar/continuar ou validar 1 perfil pendente."
++      : "O Instagram recusou esta consulta. A pausa indicada é respeitada e nada é repetido automaticamente; depois dela você pode continuar pelo botão de iniciar/continuar ou validar 1 perfil pendente."
+             });
+           },
+           resumeAfterStateCheck: function () {
+@@ -5475,6 +5508,11 @@
+               at: Date.now()
+             } }));
+           },
++                    commentQueueState: function () {
++            var page = this.pageInfo || {};
++            return { v: 154, cursor: String(page.end_cursor || ""), hasNext: !!page.has_next_page,
++              count: Number(this.insComment && this.insComment.count) || 0, updatedAt: Date.now() };
++          },
+           saveExtractRows: function () {
+             return this.persistExtractRows();
+           },
+@@ -5515,9 +5553,11 @@
+                 var data = { localStorageExtractKeys: keys };
+                 // Comment mode keeps every listed commenter, checked or not, so an interrupted
+                 // e-mail check never loses the comment list (resume re-queues the pending ones).
+-                data[key] = 4 === self.type
++                                data[key] = 4 === self.type
+                   ? self.mergeExtractRows((self.lastExtractData || []).concat(self.pendingExtractData || []), self.followList)
+                   : self.mergeExtractRows(self.lastExtractData, self.processedList);
++                // The queue's list cursor, saved in the same write as its rows.
++                if (4 === self.type && self.queueReady) data["extract_queue_".concat(id)] = self.commentQueueState();
+                 return d.a.storage.local.set(data);
+               });
+             })).catch(function (error) {
+@@ -5540,7 +5580,7 @@
+                 });
+                 var done = { localStorageExtractKeys: kept };
+                 if (!expired.length && kept.length === ((saved && saved.localStorageExtractKeys) || []).length) return done;
+-                return d.a.storage.local.remove(expired.map(function (item) { return item.key; })).then(function () {
++                return d.a.storage.local.remove(expired.map(function (item) { return item.key; }).concat(expired.map(function (item) { return String(item.key).replace(/^extract_list_/, "extract_queue_"); }))).then(function () {
+                   return d.a.storage.local.set({ localStorageExtractKeys: kept });
+                 }).then(function () { return done; });
+               });
+@@ -5553,6 +5593,20 @@
+               return this.mergeExtractRows(this.lastExtractData, this.processedList).filter(function (row) { return !!row.email; }).length;
+             return (Number(this.lastHistoryItem.count) || 0) + this.emailList.length;
+           },
++                    commenterWithId: function (item, idKey, nameKey) {
++            var get = function (path) { return v()(item, path, ""); };
++            if (get(idKey)) return item;
++            var alternate = get("user.pk_id") || get("user.id") || get("user_id") || get("pk_id");
++            if (!alternate) {
++              var name = String(get(nameKey || "user.username") || "").toLowerCase();
++              if (!name) return item;
++              alternate = "u:" + name;
++            }
++            var parts = String(idKey).split("."), copy = Object.assign({}, item), node = copy;
++            for (var i = 0; i < parts.length - 1; i++) { node[parts[i]] = Object.assign({}, node[parts[i]]); node = node[parts[i]]; }
++            node[parts[parts.length - 1]] = String(alternate);
++            return copy;
++          },
+           dropResumedRows: function (items, idKey) {
+             // Resume: never list again a profile already stored for this history.
+             var done = this.resumedRowIds;
+@@ -5562,25 +5616,39 @@
+               return !id || !Object.prototype.hasOwnProperty.call(done, String(id));
+             });
+           },
+-          restoreExtractRows: function (rows, history) {
++          restoreExtractRows: function (rows, history, queue) {
+             // Rows of earlier sessions, cleaned. When they exist they decide what is skipped on
+             // resume, because counters saved by older versions are not reliable (Comment mode
+             // counted listed commenters as extracted; the DJ filter hid rows from the count).
+-            // Rows that were never checked, or failed, are dropped so they get listed again.
+-            var ids = {}, names = {}, all = this.mergeExtractRows(rows, []);
+-            var kept = all.filter(function (row) {
+-              return !!row.loaded && false !== row.detailLoaded;
+-            });
+-            // Comment mode: commenters saved but not yet checked stay saved (they are listed and
+-            // queued again), so a resume whose list stops early never shrinks the saved list.
+-            this.pendingExtractData = 4 === this.type ? all.filter(function (row) {
+-              return !(!!row.loaded && false !== row.detailLoaded);
+-            }) : [];
++            var ids = {}, names = {}, comment = 4 === this.type, all = this.mergeExtractRows(rows, []);
++            // Comment mode: only an /users/{id}/info/ answer (or an email that really came from the
++            // commercial field) is final. Listed-but-unchecked rows, failures and rows answered by an
++            // older route wait in the queue and are asked again.
++            var isFinal = function (row) {
++              if (!row.loaded || false === row.detailLoaded) return false;
++              return !comment || !!row.email || "users_info" === row.contactRoute;
++            };
++            var kept = all.filter(isFinal);
++            var waiting = comment ? all.filter(function (row) { return !isFinal(row); }) : [];
+             kept.forEach(function (row) {
+               if (row.userId) ids[String(row.userId)] = !0;
+               if (row.userName) names[String(row.userName).toLowerCase()] = !0;
+             });
+             this.lastExtractData = kept;
++            var saved = comment && queue && 154 === queue.v && "string" === typeof queue.cursor ? queue : null;
++            if (saved) {
++              // The queue was saved with its list cursor: continue exactly there, with no page re-read.
++              this.followList = waiting.map(function (row) {
++                return Object.assign({}, row, { loaded: !0, detailLoaded: !1, contactFailure: null, emailStatus: "", email: "" });
++              });
++              this.pendingExtractData = [];
++              this.pageInfo = { end_cursor: saved.cursor, has_next_page: !!saved.hasNext };
++              if (saved.count) this.insComment = { name: this.ins, count: saved.count };
++              this.skipCount = 0;
++              this.loadUserIndex = 0;
++              this.queueReady = !0;
++              if (!saved.hasNext && !waiting.length) { this.isLoading = !1; this.isComplete = !0; }
++            } else this.pendingExtractData = waiting;
+             if (kept.length) {
+               this.resumedRowIds = ids;
+               this.resumedRowNames = names;
+@@ -5618,48 +5686,60 @@
+             // (an empty list counts as done too).
+             return !this.pageInfo.has_next_page && this.followList.length <= processed;
+           },
++          contactCardText: function (entry, outcomeText) {
++            // Names, types and the parser's decision only: never cookies, headers, tokens or the full email.
++            var safe = function (v) { return String(v).replace(/[<>&"']/g, ""); };
++            var typeOf = { valid: "texto", empty: "vazio", "null": "null", absent: "ausente", invalid: "formato inválido" };
++            var field = function (key) { return entry.keys && entry.keys[key] ? (typeOf[entry.keys[key]] || safe(entry.keys[key])) : "-"; };
++            var parts = [
++              "Validação de 1 consulta · @" + safe(entry.username),
++              "Endpoint: GET /api/v1/users/{id}/info/ (a mesma função dos outros modos)",
++              "Horário: " + new Date(entry.at).toLocaleString(),
++              "HTTP " + (null == entry.http ? "-" : entry.http) + " · Retry-After: " + (429 === entry.http ? safe(entry.retryAfter || "ausente") : "não se aplica")
++            ];
++            if (entry.keys) {
++              parts.push("public_email: " + field("public_email") + " · business_email: " + field("business_email"));
++              parts.push("Caminho do campo: " + safe(entry.emailField || "-"));
++            }
++            parts.push("Campos de e-mail recebidos (sem valores): " + (Array.isArray(entry.emailPaths) ? (entry.emailPaths.length ? entry.emailPaths.map(safe).join(", ") : "nenhum") : "nenhum corpo JSON"));
++            parts.push("Decisão do parser: " + safe(entry.decision || entry.outcome || "-") + " — " + safe(outcomeText));
++            if (entry.email) parts.push("E-mail (mascarado): " + safe(entry.email));
++            return parts.join("<br>");
++          },
+           handleContactProbe: function () {
+-            var t = this, username = String(t.contactProbeUsername || "").trim().replace(/^@/, "").toLowerCase();
++            var t = this, P = window.IGPublicContacts;
+             if (t.contactProbeRunning || (!t.isPaused && !t.isComplete) || t.retryAfterUntil > Date.now()) return;
+-            if (!/^[a-z0-9_](?:[a-z0-9_.]{0,28}[a-z0-9_])?$/.test(username)) {
+-              t.$buefy.toast.open({ message: "Informe um @perfil válido.", type: "is-warning" });
++            var row = t.followList.filter(function (item) { return item.loaded && item.detailLoaded === false && !!item.userId; })[0];
++            if (!row) {
++              t.$buefy.toast.open({ message: "Nenhum perfil pendente para validar.", type: "is-warning" });
+               return;
+             }
+             t.contactProbeRunning = true;
+-            // One manual request through the same lock, spacing, cooldown and evidence log.
+             var startedAt = Date.now();
+-            var summary = function (outcomeText, fromCache) {
+-              // This check's own log entry; for a profile already answered on this page, that answer's entry.
+-              var entry = (t.contactEvidence || []).filter(function (item) {
+-                return item && item.username === username && (fromCache || (item.probe && Number(item.at) >= startedAt));
+-              })[0];
+-              var safe = function (v) { return String(v).replace(/[<>&"']/g, ""); };
+-              var parts = ["Diagnóstico de 1 consulta · @" + safe(username), "Consulta: GET /api/v1/users/web_profile_info/"];
+-              if (fromCache) parts.push("Sem nova consulta: perfil já respondido nesta página" + (entry ? " (" + new Date(entry.at).toLocaleString() + ")" : ""));
+-              if (entry) {
+-                parts.push("HTTP " + (null == entry.http ? "-" : entry.http) + (429 === entry.http ? " · Retry-After=" + safe(entry.retryAfter || "ausente") : ""));
+-                parts.push("Campos de e-mail recebidos (sem valores): " + (Array.isArray(entry.emailPaths) ? (entry.emailPaths.length ? entry.emailPaths.map(safe).join(", ") : "nenhum") : "nenhum corpo JSON"));
+-              }
+-              parts.push("Resultado: " + safe(outcomeText));
+-              return parts.join("<br>");
++            var latest = function () {
++              return (t.contactEvidence || []).filter(function (item) { return item && item.probe && Number(item.at) >= startedAt; })[0];
+             };
+-            t.ensureCommercialReader()("", username, null, { probe: true }).then(function (result) {
++            // One request through the same lock, spacing, cooldown and evidence log. The answer is
++            // saved by user id, so the queue reuses it and never asks for this profile again.
++            t.ensureCommercialReader()(String(row.userId), row.userName, null, { probe: true }).then(function (result) {
+               var outcome = result.contactOutcome || "";
+               return t.refreshCommercialEvidence().then(function () {
++                var entry = latest();
+                 t.$buefy.notification.open({
+                   indefinite: true, position: "is-bottom-right", hasIcon: true,
+                   type: "found" === outcome ? "is-success" : "is-warning",
+-                  message: summary(window.IGPublicContacts.statusText[outcome] || outcome, !!result.fromCache)
++                  message: entry ? t.contactCardText(entry, P.statusText[outcome] || outcome) : "Validação concluída: " + (P.statusText[outcome] || outcome)
+                 });
+               });
+             }).catch(function (error) {
+               t.refreshCommercialEvidence().then(function () {
++                var entry = latest();
+                 if (error && error.stopCode !== "cooldown") t.$buefy.notification.open({
+                   indefinite: true, position: "is-bottom-right", type: "is-warning", hasIcon: true,
+-                  message: summary(error && error.commercialRequestStopped ? error.message : "falha na consulta")
++                  message: entry ? t.contactCardText(entry, error.commercialRequestStopped ? error.message : "falha na consulta") : ((error && error.message) || "falha na consulta")
+                 });
+               });
+-              // A refused check pauses exactly like the queue (429: shared pause, no retry).
++              // A refused validation pauses exactly like the queue (429: shared pause, no retry).
+               if (t.isExtraction429(error)) t.pauseExtractionOn429(error, false);
+               else if (error && error.cooldownUntil) t.retryAfterUntil = Math.max(t.retryAfterUntil || 0, error.cooldownUntil);
+               if (error && error.stopCode === "cooldown") t.$buefy.toast.open({ message: error.message, type: "is-warning", duration: 6e3 });
+@@ -5685,7 +5765,8 @@
+               { label: "business_contact_method", value: function (row) { return flag(row, "business_contact_method"); } },
+               { label: "Consulta", value: function (row) { return row.contactEndpoint || "-"; } },
+               { label: "Consultado em", value: function (row) { return row.contactCheckedAt ? new Date(row.contactCheckedAt).toLocaleString() : "-"; } },
+-              { label: "Falha de acesso", value: function (row) { return P.failureText(row.contactFailure) || "-"; } }
++              { label: "Falha de acesso", value: function (row) { return P.failureText(row.contactFailure) || "-"; } },
++              { label: "Estado do contato", value: P.contactState }
+             ];
+             var lines = this.contactDiagnosticText.split("\n").map(function (line) { return { line: line }; });
+             return [
+@@ -5900,20 +5981,13 @@
+                             } else {
+                               var detailUserIndex = t.loadUserIndex,
+                                 detailUserId = t.followList[detailUserIndex].userId;
+-                              var e = t.configs.ApiUserInfoDetail.url.replace(
+-                                "${@}$",
+-                                detailUserId
+-                              );
+                               if (!t.isExtractionCycleCurrent(extractionCycle)) return t.finishExtractionCycle("detail", extractionCycle);
+                               (4 === t.type
+-                                ? t.loadUserInfoDetailWebProfile(
++                                ? t.loadUserInfoDetailContact(
+                                     detailUserId,
+                                     t.followList[detailUserIndex].userName
+                                   )
+-                                : m.a.get(e, {
+-                                    headers: t.configs.CustomHeaders,
+-                                    withCredentials: true,
+-                                  }))
++                                : t.requestUserInfoDetail(detailUserId))
+                                 .then(
+                                   (function () {
+                                     var e = Object(l["a"])(
+@@ -5952,21 +6026,22 @@
+                                                     // Keep the commenter's own data; nothing from another profile is applied.
+                                                     t.followList.splice(detailUserIndex, 1, Object.assign({}, t.followList[detailUserIndex], {
+                                                       email: "", emailStatus: s.contactOutcome, emailSource: "", emailKind: "",
+-                                                      contactParserVersion: 14, contactEndpoint: s.contactEndpoint || "",
++                                                      contactParserVersion: 15, contactEndpoint: s.contactEndpoint || "", contactRoute: s.contactRoute || "users_info",
+                                                       contactFailure: null, contactCheckedAt: Date.now(), detailLoaded: !0
+                                                     }));
+                                                     extractionCycle.processedIndex = detailUserIndex;
+                                                     t.saveExtractRows();
+                                                     t.refreshCommercialEvidence();
+-                                                    t.consecutiveUnavailableProfiles = (t.consecutiveUnavailableProfiles || 0) + 1;
+-                                                    if (t.consecutiveUnavailableProfiles >= 3) {
++                                                    if ("no_user_id" !== s.contactOutcome) t.consecutiveUnavailableProfiles = (t.consecutiveUnavailableProfiles || 0) + 1;
++                                                    // A deleted commenter is a row result. Only a long unbroken run suggests a session problem.
++                                                    if (t.consecutiveUnavailableProfiles >= 10) {
+                                                       t.loadUserIndex = detailUserIndex + 1;
+                                                       t.manualPause = !0;
+                                                       t.pauseExtraction();
+                                                       t.updateHistory();
+                                                       t.$buefy.notification.open({
+                                                         indefinite: !0, position: "is-bottom-right", type: "is-warning", hasIcon: !0,
+-                                                        message: "Três perfis seguidos vieram indisponíveis ou divergentes. A fila foi pausada para você conferir a sessão no instagram.com; depois clique em Continue. Nenhuma nova tentativa automática."
++                                                        message: "Dez perfis seguidos vieram indisponíveis ou divergentes. A fila foi pausada para você conferir a sessão no instagram.com; depois clique em Continue. Nenhuma nova tentativa automática."
+                                                       });
+                                                       return e.abrupt("return");
+                                                     }
+@@ -6071,10 +6146,11 @@
+                                                   );
+                                                   (x = contacts.email),
+                                                     (_ = contacts.phone),
+-                                                    (g = Object.assign({}, g, {
+-                                                      avatar: g.avatar
+-                                                        ? g.avatar
+-                                                        : n[0] || "",
++                                                                (g = Object.assign({}, g, {
++              userId: 4 === t.type && s.contactUserId ? String(s.contactUserId) : g.userId,
++              avatar: g.avatar
++                ? g.avatar
++                : n[0] || "",
+                                                       userName: n[1] || "",
+                                                       fullName: n[2] || "",
+                                                       followers: n[3] || 0,
+@@ -6086,8 +6162,7 @@
+                                                       phoneSource: contacts.phoneSource,
+                                                       emailStatus: contacts.emailStatus,
+                                                       phoneStatus: contacts.phoneStatus,
+-                                                      contactParserVersion: 14,
+-                                                      contactEndpoint: s.contactEndpoint || "",
++                                                      contactParserVersion: 15, contactEndpoint: s.contactEndpoint || "", contactRoute: s.contactRoute || "users_info",
+                                                       emailKind: contacts.emailKind || "",
+                                                       contactProfileType: contacts.profileType || "",
+                                                       contactKeys: s.contactKeys || null,
+@@ -6732,13 +6807,8 @@
+                 this.loadPostsLikeOwnerList();
+                 break;
+               case 4:
+-                this.configs.ApiUserInfoDetail = {
+-                  url: "https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}",
+-                  checkKey: "data.status",
+-                  checkValue: "ok",
+-                  dataKeys:
+-                    "data.user.profile_pic_url|data.user.username|data.user.full_name|data.user.follower_count|data.user.following_count|data.user.public_email|data.user.media_count|data.user.public_phone_country_code|data.user.public_phone_number|data.user.contact_phone_number|data.user.city_name|data.user.address_street|data.user.is_private|data.user.is_verified|data.user.is_business|data.user.external_url|data.user.biography",
+-                };
++                // PATCHED 15.4: no ApiUserInfoDetail override. The profile detail of the Comment
++                // mode is the same /api/v1/users/${@}$/info/ request as every other mode.
+                 this.loadPostsCommentOwnerList();
+                 break;
+               case 5:
+@@ -7006,16 +7076,17 @@
+                                               s.get("lastCursor")),
+                                             (t.isLoading = !0),
+                                             (e.next = 7),
+-                                            d.a.storage.local.get(
+-                                              "extract_list_".concat(w.id)
+-                                            )
++                                            d.a.storage.local.get([
++                "extract_list_".concat(w.id),
++                "extract_queue_".concat(w.id)
++              ])
+                                           );
+                                         case 7:
+                                           if (!t.isExtractionCycleCurrent(extractionCycle)) return e.abrupt("return");
+                                           (a = e.sent),
+                                             t.restoreExtractRows(
+-                                              a["extract_list_".concat(w.id)] ||
+-                                              [], s),
++                a["extract_list_".concat(w.id)] ||
++                [], s, a["extract_queue_".concat(w.id)]),
+                                             t.startLoadAllData();
+                                         case 10:
+                                         case "end":
+--- 15.3/LEIA-ME.txt
++++ 15.4/LEIA-ME.txt
+@@ -1,67 +1,85 @@
+-Autland IG Extractor — PATCHED 15.3 — Diagnóstico do contato comercial
++Autland IG Extractor — PATCHED 15.4 — E-mail comercial via /users/{id}/info/
+ 
+ SITUAÇÃO (leia antes de instalar)
+-- Modo Comment: a coleta do e-mail de Contato → E-mail NÃO ESTÁ RESTAURADA.
+-  Esta versão NÃO foi validada em resposta real do Instagram. Não é a correção
+-  final: é uma versão de diagnóstico com as correções de fila abaixo.
+-- Nos 3 testes reais de 05/10/2026 (12:59, 13:13 e 14:16), a 1ª consulta de
+-  perfil recebeu HTTP 429. Nenhuma resposta de perfil chegou.
+-- Mesmo sem o 429, a consulta usada no modo Comment (web_profile_info) traz o
+-  e-mail em data.user.business_email. Esse campo veio nulo em todas as
+-  respostas reais de terceiros de 2022 em diante. O e-mail aparecia antes por
+-  outra consulta: /api/v1/users/{id}/info/, campo user.public_email. Ela
+-  continua fora do modo Comment, pela regra que você definiu.
+-- Modos Seguidores, Seguindo, Curtidas, Hashtag, Local e Lista: sem mudança.
+-
+-O QUE MUDOU NA 15.3 (só o que afeta a coleta do e-mail)
+-1. Lista primeiro. O modo Comment lê e salva todos os comentaristas antes da
+-   1ª consulta de e-mail (cerca de 15 s por página de comentários). Um 429 na
+-   consulta de e-mail não corta mais a lista: os comentaristas ficam na
+-   tabela, no histórico e na exportação. Uma página sem cursor novo encerra
+-   a lista (na 15.2, um cursor repetido deixava a extração sem fim). Numa
+-   retomada, os comentaristas já salvos continuam salvos mesmo se a lista
+-   parar no meio.
+-2. Sem conclusão inventada. CALL/TEXT com e-mail nulo aparece como "Campo
+-   comercial vazio". A 15.2 dizia "e-mail não entregue pela consulta web",
+-   uma inferência sem prova.
+-3. Perfil sem e-mail não para a fila. Vazios, omitidos, ocultos e contas
+-   pessoais viram status na linha. Só falhas de acesso pausam (429, 403,
+-   login, rede).
+-4. Cache por perfil (nome + ID). Um perfil já respondido não é consultado de
+-   novo, nem em outra extração: validade de 14 dias, ou 3 dias para perfil
+-   indisponível. Linhas vindas do cache não esperam o intervalo.
+-5. Intervalo adaptativo. Base de 10 s entre consultas. Cada 429 dobra o
+-   intervalo (até 2 min) para depois da pausa. 5 respostas seguidas reduzem
+-   20%, até voltar a 10 s.
+-6. Diagnóstico de 1 clique ("Verificar 1 perfil"). Faz 1 consulta e mostra:
+-   a rota, o HTTP, o Retry-After (se for 429), os nomes e tipos dos campos de
+-   e-mail recebidos (sem valores) e o resultado. Nada de cookie, token ou
+-   valor pessoal.
++- Implementação concluída, mas NÃO validada em resposta real do Instagram.
++  O ambiente onde esta versão foi feita não acessa o instagram.com nem a sua
++  sessão. Todos os testes usam respostas simuladas (as formas vêm de capturas
++  públicas reais, anonimizadas). Falta uma única validação real, que a própria
++  extensão mostra na tela (veja "VALIDAÇÃO REAL" abaixo).
++- Os seus 3 testes reais anteriores (15, 15.1 e 15.2) receberam HTTP 429 na
++  1ª consulta de perfil. A 15.4 não promete vencer o 429: ela respeita o
++  limite e evita consultas desnecessárias.
++
++POR QUE A 15.3 NÃO TRAZIA O E-MAIL
++O modo Comment perguntava web_profile_info. Essa consulta entrega o e-mail em
++data.user.business_email, que veio nulo em todas as respostas reais de
++terceiros guardadas. O e-mail vem de outra consulta, que os outros modos da
++extensão já usam: GET /api/v1/users/{id}/info/, campo user.public_email.
++Autorizado por você, o modo Comment passou a usar essa consulta.
++
++O QUE MUDOU NA 15.4
++1. Mesma função dos outros modos. O Comment chama /users/{id}/info/ pela
++   mesma função (mesma URL, mesmos cabeçalhos da sua sessão, mesmas
++   credenciais) que Seguidores, Seguindo, Curtidas, Hashtag, Local e Lista.
++   Não existe segunda implementação. A web_profile_info saiu do fluxo.
++2. Uma consulta por perfil, direto do comentário: comentário -> user_id ->
++   /users/{id}/info/. Sem a consulta anterior por @nome (metade das consultas).
++3. E-mail só do campo público do Instagram: public_email; business_email só se
++   vier preenchido. Nunca bio, legenda, comentário, site, login ou
++   recuperação. CALL/TEXT não prova que existe botão de e-mail.
++4. Cada perfil termina em um só estado:
++   E-mail comercial encontrado .......... o Instagram devolveu o e-mail
++   Perfil não disponibiliza e-mail público  HTTP 200 sem e-mail (vazio, oculto,
++                                            conta pessoal, campo ausente)
++   Aguardando consulta .................. ainda não consultado
++   Consulta pausada pelo Instagram ...... HTTP 429
++   Sessão precisa ser verificada ........ login, desafio ou página de login
++   Acesso negado pelo Instagram ......... HTTP 403
++   Falha temporária na consulta ......... rede, erro 5xx ou resposta inválida
++   Perfil indisponível .................. conta apagada (HTTP 404)
++   Só HTTP 200 com o perfil real vira "sem e-mail". 429, 403, rede e resposta
++   inválida nunca viram "sem e-mail" e não são salvos como resultado.
++5. Perfil sem e-mail, CALL/TEXT ou várias respostas vazias seguidas NÃO param
++   a fila. Só falha de acesso pausa.
++6. Fila persistente. A lista de comentaristas é lida e salva inteira (sem
++   duplicar por user_id) antes da 1ª consulta de e-mail, junto com o cursor da
++   lista. Ao fechar ou atualizar a extensão e retomar, a fila continua do
++   ponto salvo: sem reler páginas e sem repetir perfis já consultados.
++7. Cache por user_id (14 dias com e-mail, 7 sem e-mail, 3 para perfil
++   indisponível). Um perfil já consultado não é consultado de novo, nem em
++   outra extração. Linhas do cache não esperam o intervalo.
++8. Ritmo conservador e adaptativo: 15 a 30 s entre perfis (o mesmo padrão dos
++   outros modos; o seu intervalo salvo vale), 1 consulta por vez entre todas
++   as abas. Cada 429 dobra o intervalo (até 2 min); 5 respostas seguidas
++   reduzem 20%.
++9. Validação inicial. A 1ª resposta real de cada execução abre um quadro:
++   endpoint, HTTP, horário, tipo de public_email, caminho do campo,
++   Retry-After e decisão do parser. O botão "Validar 1 perfil pendente" faz 1
++   única consulta, mostra o mesmo quadro e deixa a resposta salva para a fila.
++   Se vier 429, nenhuma outra consulta acontece. Cookies, tokens, cabeçalhos
++   e o e-mail completo nunca aparecem (só o e-mail mascarado).
+ 
+ PRESERVADO
+-- HTTP 429: pausa compartilhada e salva pelo Retry-After (60 minutos quando
+-  não informado), nunca encurtada. No modo Comment nada é repetido
+-  automaticamente; Iniciar confere a pausa salva antes de qualquer consulta.
+-- 1 consulta por vez entre dashboards e intervalo mínimo de 10 s.
+-- Sem troca de cabeçalho, sessão, User-Agent, host, proxy ou conta.
+-- /users/{id}/info/ continua fora do modo Comment.
+-- E-mail da bio, de sites e de links NUNCA preenche a coluna de e-mail.
++- HTTP 429: pausa imediata no 1º 429, Retry-After respeitado, 60 minutos quando
++  não vem, pausa salva e compartilhada entre abas, nenhuma consulta durante
++  a pausa, nenhuma repetição automática. A pausa salva da 15.3 vale na 15.4.
++- Sem proxy, troca de IP, rotação de conta, cliente móvel falso, cookies
++  copiados ou token externo. Só a sessão normal da extensão.
++- Chave do manifesto, ID da extensão, permissões e os outros modos.
+ 
+-INSTALAÇÃO
++ATUALIZAÇÃO (sem remover a extensão e sem apagar o armazenamento)
+ 1. Feche os dashboards abertos e extraia o ZIP inteiro.
+ 2. Copie TODOS os arquivos para a pasta da extensão já instalada,
+    substituindo os correspondentes.
+ 3. Em chrome://extensions, clique em Recarregar na Autland IG Extractor.
+-   Não remova a extensão: isso apagaria o histórico e a pausa salva.
+-4. Abra uma extração do modo Comment. O cabeçalho deve mostrar
+-   "PATCHED 15.3 · Diagnóstico do contato comercial (coleta não restaurada)".
+-
+-TESTE REAL EM 1 CLIQUE (depois da pausa mostrada na tela)
+-1. No campo "@perfil", digite um perfil que no app do celular mostra
+-   Contato → E-mail.
+-2. Clique em "Verificar 1 perfil". Sai 1 única consulta.
+-3. Tire um print do quadro "Diagnóstico de 1 consulta". Ele decide o caso:
+-   - HTTP 200 e "data.user.business_email=null": a rota responde, mas não
+-     traz o e-mail. Prova que esta consulta não serve para esse campo.
+-   - HTTP 200, "=texto" e "Contato público do Instagram": coleta comprovada.
+-   - HTTP 429: limite do Instagram. A pausa é respeitada e nada é repetido.
++   Não remova a extensão: isso apagaria o histórico, a fila e a pausa salva.
++4. Abra o modo Comment. O cabeçalho deve mostrar
++   "PATCHED 15.4 · E-mail comercial via /users/{id}/info/".
++5. Se houver pausa de 429 salva, aguarde o horário mostrado na tela.
++
++VALIDAÇÃO REAL (um clique)
++1. No modo Comment, clique em Iniciar. A lista é lida e salva.
++2. A 1ª consulta de e-mail sai e mostra o quadro da validação. Se vier
++   "email_found" com "public_email: texto", o e-mail está sendo coletado e
++   a fila segue sozinha. Se vier "no_public_email" para um perfil que no app
++   mostra Contato -> E-mail, envie o print do quadro.
+--- 15.3/PATCH_NOTES.txt
++++ 15.4/PATCH_NOTES.txt
+@@ -1,3 +1,44 @@
++PATCHED 15.4 — 05/10/2026
++Comment mode asks /api/v1/users/{id}/info/, the request every other mode already
++uses. Implementation complete, NOT validated against a real Instagram response
++(the build environment has no access to instagram.com or to the user's session).
++- Cause of 15.3: Comment mode asked web_profile_info, whose email field
++  data.user.business_email is null in every real capture kept; the public email
++  lives in user.public_email of /users/{id}/info/. The user authorised that route
++  for Comment mode.
++- One shared request: Comment calls the same function as the other modes
++  (ApiUserInfoDetail URL, the session's own headers, withCredentials). The reader
++  no longer builds a request; it only decides what the answer means. The
++  web_profile_info step is gone from the email flow: comment -> user_id ->
++  /users/{id}/info/ (half the requests).
++- Parser: the user object is located only in user, data.user or items[0].user
++  (checked against the requested id); email from public_email, else a filled
++  business_email; never bio, caption, comment, site, login or recovery data; CALL/TEXT
++  proves nothing.
++- States: email_found, no_public_email (HTTP 200 with the real profile only),
++  rate_limited (429), login_required (401, login/challenge, login page),
++  access_denied (403), temporary_error (network, 5xx, invalid answer), pending,
++  and profile_unavailable for a deleted profile (404). Failures are never saved as
++  results and never read as "no email". A profile without email, CALL/TEXT or
++  several empty answers in a row never stop the queue.
++- Persistent queue: rows are saved after every comment page together with the list
++  cursor (extract_queue_<history>); a resume continues exactly there, without
++  re-reading pages or repeating answered profiles. Rows answered by the old web
++  route without an email are asked again; rows that already hold an email are kept.
++  A comment without user.pk takes its id from user.pk_id/user.id/user_id or from a
++  saved answer, else it is keyed by username and never costs a request.
++- Persistent cache by user id (14 days with email, 7 without, 3 unavailable, 3000
++  entries), username -> id index from the same cache, cached rows skip the wait.
++- Pacing: Comment uses the same 15-30 s default as the other modes (saved range
++  wins, 10 s floor); a 429/400 doubles the spacing up to 2 min; five answers in a
++  row reduce it by 20%. One request at a time across dashboards.
++- Validation: the first real answer of a run shows a card (endpoint, HTTP, time,
++  public_email type, field path, Retry-After, parser decision, masked email);
++  "Validar 1 perfil pendente" does one request for the first pending profile and
++  leaves the answer saved for the queue; a 429 there stops everything.
++- Unchanged: 429 handling and the saved pause (same key, kept across the update),
++  Retry-After, no automatic retry, manifest key and extension id, permissions.
++
+ PATCHED 15.3 — 05/10/2026
+ Diagnostic build for Comment mode. The public commercial email is NOT
+ restored, and this build was NOT validated against a real Instagram response.

@@ -1,0 +1,119 @@
+{
+ "data": {
+  "user": {
+   "ai_agent_type": null,
+   "bio_links": [
+    {
+     "link_type": "external",
+     "lynx_url": "https://exemplo.com.br/recurso",
+     "title": "Perfil Exemplo",
+     "url": "https://exemplo.com.br/recurso"
+    },
+    {
+     "link_type": "external",
+     "lynx_url": "https://exemplo.com.br/recurso",
+     "title": "Perfil Exemplo",
+     "url": "https://exemplo.com.br/recurso"
+    }
+   ],
+   "biography": "Bio de exemplo",
+   "biography_with_entities": {
+    "entities": [
+     {
+      "hashtag": null,
+      "user": {
+       "username": "perfil_exemplo"
+      }
+     },
+     {
+      "hashtag": null,
+      "user": {
+       "username": "perfil_exemplo"
+      }
+     },
+     {
+      "hashtag": null,
+      "user": {
+       "username": "perfil_exemplo"
+      }
+     }
+    ],
+    "raw_text": "Bio de exemplo"
+   },
+   "blocked_by_viewer": false,
+   "business_address_json": "{\"city_name\": null, \"city_id\": null, \"latitude\": null, \"longitude\": null, \"street_address\": null, \"zip_code\": null}",
+   "business_category_name": null,
+   "business_contact_method": "CALL",
+   "business_email": null,
+   "business_phone_number": null,
+   "category_enum": null,
+   "category_name": null,
+   "connected_fb_page": null,
+   "country_block": false,
+   "edge_follow": {
+    "count": 1234
+   },
+   "edge_followed_by": {
+    "count": 1234
+   },
+   "edge_mutual_followed_by": {
+    "count": 0,
+    "edges": []
+   },
+   "edge_owner_to_timeline_media": {
+    "count": 1234,
+    "edges": [],
+    "page_info": {
+     "end_cursor": "",
+     "has_next_page": true
+    }
+   },
+   "eimu_id": "1000000001",
+   "external_url": "https://exemplo.com.br/recurso",
+   "external_url_linkshimmed": "https://exemplo.com.br/recurso",
+   "fb_profile_biolink": null,
+   "fbid": "1000000001",
+   "followed_by_viewer": false,
+   "follows_viewer": false,
+   "full_name": "Perfil Exemplo",
+   "group_metadata": null,
+   "guardian_id": null,
+   "has_ar_effects": true,
+   "has_blocked_viewer": false,
+   "has_chaining": true,
+   "has_channel": false,
+   "has_clips": true,
+   "has_guides": false,
+   "has_requested_viewer": false,
+   "hide_like_and_view_counts": false,
+   "highlight_reel_count": 1234,
+   "id": "1000000001",
+   "is_business_account": false,
+   "is_embeds_disabled": false,
+   "is_guardian_of_viewer": false,
+   "is_joined_recently": false,
+   "is_private": false,
+   "is_professional_account": true,
+   "is_regulated_c18": false,
+   "is_supervised_by_viewer": false,
+   "is_supervised_user": false,
+   "is_supervision_enabled": false,
+   "is_verified": true,
+   "is_verified_by_mv4b": false,
+   "overall_category_name": null,
+   "pinned_channels_list_count": 0,
+   "profile_pic_url": "https://exemplo.com.br/recurso",
+   "profile_pic_url_hd": "https://exemplo.com.br/recurso",
+   "pronouns": [],
+   "requested_by_viewer": false,
+   "restricted_by_viewer": false,
+   "should_show_category": true,
+   "should_show_public_contacts": true,
+   "show_account_transparency_details": true,
+   "transparency_label": null,
+   "transparency_product": null,
+   "username": "perfil_exemplo"
+  }
+ },
+ "status": "ok"
+}

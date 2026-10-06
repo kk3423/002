@@ -1,0 +1,212 @@
+PATCHED 15.4 — 05/10/2026
+Comment mode asks /api/v1/users/{id}/info/, the request every other mode already
+uses. Implementation complete, NOT validated against a real Instagram response
+(the build environment has no access to instagram.com or to the user's session).
+- Cause of 15.3: Comment mode asked web_profile_info, whose email field
+  data.user.business_email is null in every real capture kept; the public email
+  lives in user.public_email of /users/{id}/info/. The user authorised that route
+  for Comment mode.
+- One shared request: Comment calls the same function as the other modes
+  (ApiUserInfoDetail URL, the session's own headers, withCredentials). The reader
+  no longer builds a request; it only decides what the answer means. The
+  web_profile_info step is gone from the email flow: comment -> user_id ->
+  /users/{id}/info/ (half the requests).
+- Parser: the user object is located only in user, data.user or items[0].user
+  (checked against the requested id); email from public_email, else a filled
+  business_email; never bio, caption, comment, site, login or recovery data; CALL/TEXT
+  proves nothing.
+- States: email_found, no_public_email (HTTP 200 with the real profile only),
+  rate_limited (429), login_required (401, login/challenge, login page),
+  access_denied (403), temporary_error (network, 5xx, invalid answer), pending,
+  and profile_unavailable for a deleted profile (404). Failures are never saved as
+  results and never read as "no email". A profile without email, CALL/TEXT or
+  several empty answers in a row never stop the queue.
+- Persistent queue: rows are saved after every comment page together with the list
+  cursor (extract_queue_<history>); a resume continues exactly there, without
+  re-reading pages or repeating answered profiles. Rows answered by the old web
+  route without an email are asked again; rows that already hold an email are kept.
+  A comment without user.pk takes its id from user.pk_id/user.id/user_id or from a
+  saved answer, else it is keyed by username and never costs a request.
+- Persistent cache by user id (14 days with email, 7 without, 3 unavailable, 3000
+  entries), username -> id index from the same cache, cached rows skip the wait.
+- Pacing: Comment uses the same 15-30 s default as the other modes (saved range
+  wins, 10 s floor); a 429/400 doubles the spacing up to 2 min; five answers in a
+  row reduce it by 20%. One request at a time across dashboards.
+- Validation: the first real answer of a run shows a card (endpoint, HTTP, time,
+  public_email type, field path, Retry-After, parser decision, masked email);
+  "Validar 1 perfil pendente" does one request for the first pending profile and
+  leaves the answer saved for the queue; a 429 there stops everything.
+- Unchanged: 429 handling and the saved pause (same key, kept across the update),
+  Retry-After, no automatic retry, manifest key and extension id, permissions.
+
+PATCHED 15.3 — 05/10/2026
+Diagnostic build for Comment mode. The public commercial email is NOT
+restored, and this build was NOT validated against a real Instagram response.
+- Why 15.2 fails: Comment mode asks GET /api/v1/users/web_profile_info/,
+  whose email field data.user.business_email is null in every real capture
+  since 2022, and in the user's three real tests that request got HTTP 429 on
+  the first call. The flow that used to fill the email is
+  GET /api/v1/users/{id}/info/ -> user.public_email. It is still used by the
+  other modes and still excluded from Comment mode by the user's rule.
+- List first: the whole comment list is read and saved before the first
+  profile check, so a 429 on a check no longer cuts the list. A page without
+  a new cursor (missing or repeated) ends the list; in 15.2 a repeated cursor
+  kept the run from ever completing. On resume, commenters saved but not yet
+  checked stay saved even if the list stops early.
+- No inferred labels: business_contact_method CALL/TEXT with a null email is
+  an empty field ("Campo comercial vazio"), not "withheld by the web route".
+- No queue stop for missing emails: empty, omitted, hidden and personal
+  profiles never stop the queue; only access failures pause it.
+- Persistent profile cache (username + id; 14 days, 3 days for unavailable
+  profiles, 3000 profiles): no repeated request across extractions; cached
+  rows skip the per-row wait.
+- Adaptive spacing: 10 s base; each 429/400 doubles it (max 2 min) for after
+  the pause; five answered profiles in a row reduce it by 20%.
+- One-click diagnostic ("Verificar 1 perfil"): one request, then a card with
+  the route, HTTP status, Retry-After, the email-related field paths received
+  (names and value types only) and the result. The same paths go to the
+  diagnostic text and the XLSX diagnostic sheet.
+- Unchanged: request headers and cookies, the 429 pause and Retry-After
+  rules, no automatic retry in Comment mode, the serial lock, the 10 s minimum
+  spacing, no /users/{id}/info/ in Comment mode, no bio/site email.
+
+PATCHED 15.2 — 05/10/2026
+Investigation of the second real test (13:13, PATCHED 15.1): the saved pause from
+12:59 was missing and the refusal counter was back to 1.
+- Facts: the pause and the counter are written only by the profile reader and by
+  the dashboard's 429 handler, always as "the longer pause wins"; nothing in the
+  extension deletes or lowers them; the keys have not changed since PATCHED 14.
+  Chromium tests with PATCHED 15.1 keep both across reopening the dashboard at
+  13:13, the extension Reload button, newer files copied over the folder plus
+  Reload, a browser restart, the same extension loaded from another folder and
+  several tabs, with ZERO Instagram requests during the pause. The 13:13 screens
+  (no pause, counter 1, new pause until 14:13) are reproduced exactly when the
+  extension's saved state is empty. What emptied it is not proven.
+- Fixed: the dashboard's 429 handler merged the pause without the lock used by
+  the reader, so two tabs could, in a narrow race, write the shorter pause last.
+  Both now merge under one lock, retry once, and a failed save is shown.
+- Diagnostics: the panel shows the pause saved in the browser (not only this
+  tab's memory), "Retry-After=ausente" for a 429 without the header, a failed
+  pause save per response, and the date this browser's saved state started, so
+  a reset can be proven next time. No cookies, tokens or headers are recorded.
+- Unchanged: the request itself (endpoint, headers, cookies), the 429 rules and
+  the exclusion of /users/{id}/info/ from Comment mode. The public commercial
+  email is still not delivered: collection is NOT restored.
+
+PATCHED 15.1 — 05/10/2026
+- Real test by the user (05/10/2026 12:59, Comment mode, post with 733
+  comments): the comment list loaded (47 commenters) and the FIRST
+  web_profile_info request got HTTP 429 without Retry-After. The extension
+  paused until 13:59:23, marked the row as an access failure and repeated
+  nothing. The public commercial email is still not confirmed.
+- The Comment progress line counted checked profiles as "perfis encontrados"
+  and showed "0" while 47 commenters were listed. It now reads
+  "47 perfis encontrados, 0 consultados".
+- The popup shows the full patch level (e.g. "PATCHED 15.1").
+
+PATCHED 15 — 05/10/2026
+Stability release for every mode. The Comment-mode route and its limits are
+unchanged from PATCHED 14: one ordinary web_profile_info request per profile,
+serial, 10 s minimum spacing, shared persistent 429 cooldown (Retry-After,
+60 min default), no automatic retry, no /users/{id}/info/ in Comment mode.
+A public commercial email delivered by that route is still NOT confirmed by a
+real response: no request to Instagram was possible while building it.
+
+Fixes
+- Comment resume: the history counted listed commenters as extracted, so a
+  resume after a 429 skipped commenters never checked (98 of 150 in the
+  simulation; all of them when the 429 came on the first check). Counts now
+  use checked profiles only, the end of the comment list no longer marks the
+  history as complete, and a resume skips exactly the profiles already
+  stored. Counters saved by older versions are not trusted for Comment mode.
+- History rows: one row per profile (no duplicates after a resume). Rows saved
+  by older versions are cleaned on resume, so a bio/site email never fills the
+  email column again. The popup History export applies the same rule, uses
+  the "E-mail comercial" header plus the "Status do e-mail" column, and its
+  email count matches what it exports.
+- DJ filter: it filters the table and the export only. It no longer decides
+  which rows are saved, when a run completes or the history counters (with
+  the filter on, a run never completed and hidden rows vanished from History).
+- Other modes, deleted profile: a 404 on the profile detail is recorded as
+  "Perfil indisponível" and the queue moves on. Before, it was retried, opened
+  an instagram.com tab and the run never completed. Three in a row pause the
+  run for a session check, without automatic retry.
+- Other modes, errors: a failing profile is retried once, then recorded as a
+  failure in the status column so the run can complete. The retry counter now
+  resets after every answered profile (two errors anywhere in a run used to
+  disable every later retry). A login/HTML page keeps that profile as the next
+  one to try.
+- Other modes, renamed profile: the detail is matched by id, so a profile
+  renamed between the list and its detail keeps its commercial email.
+- User list: a name with no profile is recorded as unavailable and never
+  produces a /users//info/ request with an empty id; network errors stay
+  retryable on resume; an empty or already finished list completes.
+- Background instagram.com "claim" tab: once per 100 processed profiles. In
+  Comment mode with 100, 200, ... commenters it opened on every profile.
+- Saved 429 pause: the other modes resume by themselves when a pause saved by
+  another dashboard ends (Comment mode still waits for Iniciar).
+- History index: saves from two open dashboards no longer overwrite each
+  other's entries and dates (the 190-day cleanup could delete a history that
+  had just been used).
+- Instagram's own error text is stripped of markup in every notification.
+
+Validation: 41 parser/reader unit tests; 12 data/history tests that run the
+real dashboard and popup code in Node (10 of them fail on PATCHED 14, which
+reproduces the defects above); end-to-end runs of the real dashboard in
+Chromium for every mode. Every Instagram response in these tests is simulated.
+
+==============================================================================
+
+PATCHED 14 — 04/10/2026
+Comment detail enrichment keeps one ordinary web_profile_info request per
+profile. A live public commercial email is still NOT confirmed: no request to
+Instagram was made while building this version (the build environment has no
+access to instagram.com or to the user's session), and the only live request
+to this route (PATCHED 13) returned HTTP 429.
+
+Evidence used to calibrate the parser (third-party public captures, ~75 real
+responses, no contact with Meta):
+- Web shape (web_profile_info / ?__a=1 / graphql): business_email is null in
+  every capture from 2022 onward, including logged-in ones and business
+  profiles advertising CALL/TEXT with contacts marked visible. 2019-2021
+  captures did carry it.
+- The public email appears in current captures only as public_email on the
+  mobile /users/{id}/info/ shape, which stays out of Comment mode.
+- should_show_public_contacts is the owner's "display on profile" switch, not
+  a viewer permission, and can be absent.
+- Public reports (Sept 2026) describe web_profile_info refusing logged-in
+  sessions with 429 on the first call or 400 feedback_required.
+
+Changes
+- Per-profile status: found / not_delivered (contact advertised, email and
+  phone null) / empty / hidden / omitted / personal account / unavailable /
+  identity mismatch, kept apart from access failures.
+- Withheld-contact detection: professional profile, contacts displayed,
+  contact method CALL/TEXT, email and phone null -> "not delivered by the web
+  route". Three such profiles with zero emails ever delivered end the route.
+- Access failures (429, 403, redirect, HTML, network) are marked on the row
+  and stop the queue without automatic retry, in the comment-list lane too.
+- Repeated refusals (429/400) never end the route: they keep the cooldown and
+  the manual restart, and only raise a diagnostic warning.
+- Start/Continue re-read the shared cooldown and the route decision from
+  storage before any request; a shorter Retry-After can no longer shorten a
+  longer saved pause; a 429 whose persistence fails is still reported as 429.
+- One in-page cache per profile shared by the queue and the manual check; a
+  cached identity mismatch is never reused for the account that came back.
+- Sanitized evidence log plus a persisted "first delivered email" record, so
+  the proof indicator survives the rolling log.
+- Comment-mode XLSX exports carry two diagnostic sheets automatically.
+- Instagram's own error text is stripped of markup before reaching HTML
+  notifications; the panel runs its own clock for cooldown gates.
+- Route counters separate "the route answered" (200/404) from "a profile
+  was delivered" (200 with a user object).
+- A queue paused on the last profile now completes instead of looping.
+
+Preserved: 429 persistent shared cooldown with Retry-After (60 min default),
+manual start, serial lock, 10 s minimum spacing, no /users/{id}/info/ in
+Comment, no UA/auth/host substitution, history, table and exports; other modes
+untouched.
+
+Validation: syntax check of all JavaScript, 41 unit tests, and end-to-end runs
+of the real dashboard in Chromium with every network request simulated.
+No real Instagram response was obtained or verified.

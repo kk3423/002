@@ -8,13 +8,13 @@ EXT=$(cd "$1" && pwd); LABEL=$2; OUT=$3
 export NODE_PATH=${NODE_PATH:-$(npm root -g)}
 mkdir -p "$OUT"
 batches=(
-  "tipos_mistos omitidos_profissionais retido_pela_web pausa_compartilhada primeiro_429:300"
+  "tipos_mistos omitidos_profissionais retido_pela_web validacao_inicial primeiro_429:300"
   "primeiro_429 verificacao_429 lista_sem_retry prova_persistente identidade"
-  "falha_acesso:http403 falha_acesso:redirect falha_acesso:html tres_indisponiveis export_vazio"
+  "falha_acesso:http403 falha_acesso:html falha_acesso:negado falha_acesso:http503 tres_indisponiveis"
+  "export_vazio pausa_compartilhada ritmo_padrao comentarios_primeiro cache_entre_extracoes"
   "seguidores seguidores_429 seguindo curtidas hashtag"
   "local lista lista_inexistente dj_filtro seguidores_pausa_salva"
   "retomada_comment seguidores_falhas pausa_1259_1313 armazenamento_vazio_1313"
-  "comentarios_primeiro cache_entre_extracoes"
 )
 i=0
 for b in "${batches[@]}"; do

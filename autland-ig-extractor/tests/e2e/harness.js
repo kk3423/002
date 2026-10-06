@@ -2,7 +2,10 @@
  * dashboard in Comment mode. EVERY network request is intercepted:
  *   - Parse backend (igemailextractor.echobot.dev) -> canned responses
  *   - Instagram comment list (test-only URL from the mocked remote config)
- *   - Instagram web_profile_info -> scenario fixtures (simulated, not real)
+ *   - Instagram /api/v1/users/{id}/info/ (Comment mode: the id is mapped to the commenter's fixture)
+ *   - Instagram web_profile_info -> forbidden in Comment mode (the 15.4 flow never asks it); used by
+ *     the user-list mode only to turn @names into ids
+ *   (all profile answers are simulated fixtures, not real)
  *   - anything else -> aborted and logged as "blocked"
  * No request ever leaves the machine. */
 const { chromium } = require('playwright');
@@ -150,6 +153,26 @@ async function install(ctx, scenario, log) {
       const comments = all.slice(page * size, (page + 1) * size), more = (page + 1) * size < all.length;
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', comments, next_cursor: more ? 'p' + (page + 1) : '', has_more: more, comment_count: all.length }) });
     }
+    const commentInfo = scenario.comments && scenario.profiles && u.host.endsWith('instagram.com') && u.pathname.match(/^\/api\/v1\/users\/(\d+)\/info\/?$/);
+    if (commentInfo) {
+      const pk = commentInfo[1];
+      const commenter = scenario.comments.find((c) => String(c.pk) === pk);
+      const username = commenter ? commenter.username : null;
+      const key = username || 'info:' + pk;
+      const n = (state.profileCalls[key] = (state.profileCalls[key] || 0) + 1);
+      const all = await req.allHeaders();
+      log.push({ t, kind: 'profile', username, pk, n, path: u.pathname, headers: { 'x-ig-app-id': all['x-ig-app-id'], 'user-agent': all['user-agent'] ? 'present' : 'absent' },
+        credentials: { csrfHeader: !!all['x-csrftoken'], withClaimHeader: 'x-ig-www-claim' in all } });
+      const fixture = username && scenario.profiles[username];
+      const res = fixture ? fixture(n, req) : { status: 404, body: { message: 'User not found', status: 'fail' } };
+      const body = typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
+      return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': res.contentType || 'application/json' }, res.headers || {}), body });
+    }
+    if (u.host === 'www.instagram.com' && u.pathname === '/api/v1/users/web_profile_info/' && scenario.comments) {
+      // Comment mode never asks the web route: any request here is a defect.
+      log.push({ t, kind: 'FORBIDDEN_web_profile_info', url });
+      return route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+    }
     if (u.host === 'www.instagram.com' && u.pathname === '/api/v1/users/web_profile_info/') {
       const username = u.searchParams.get('username');
       const n = (state.profileCalls[username] = (state.profileCalls[username] || 0) + 1);
@@ -206,7 +229,7 @@ async function snapshot(page) {
       retryAfterUntil: vm.retryAfterUntil, commercialStartRequired: vm.commercialStartRequired,
       commercialContactUnavailable: vm.commercialContactUnavailable,
       detailCycle: !!vm.detailCycle, loadUserIndex: vm.loadUserIndex,
-      rows: vm.followList.map(r => ({ user: r.userName, id: r.userId, email: r.email, status: r.emailStatus, text: P.emailStatusText(r),
+      rows: vm.followList.map(r => ({ user: r.userName, id: r.userId, email: r.email, status: r.emailStatus, text: P.emailStatusText(r), state: P.contactState(r),
         detailLoaded: r.detailLoaded, failure: r.contactFailure || null, profileType: r.contactProfileType || null,
         followers: r.followers, bio: r.bio, fullName: r.fullName })),
       emailList: vm.emailList.map(r => r.email),

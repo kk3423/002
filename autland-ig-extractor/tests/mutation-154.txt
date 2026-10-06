@@ -1,0 +1,13 @@
+Teste de mutação (tests/mutate154.py): um defeito é injetado numa cópia do ZIP extraído e as suítes
+unitária e de dados rodam. Cada defeito precisa fazer pelo menos um teste falhar.
+
+A: pausa 429 ignorada (assertOpen não lança)                       -> unit 2/45 falham, dados 0/28 falham   DETECTADO
+B: erro 5xx vira "perfil indisponível" (falha lida como resultado)  -> unit 4/45 falham, dados 1/28 falham   DETECTADO
+C: cache por user id desligado                                      -> unit 5/45 falham, dados 1/28 falham   DETECTADO
+D: fila persistente ignorada na retomada                            -> unit 0/45 falham, dados 3/28 falham   DETECTADO
+E: business_email com prioridade sobre public_email                 -> unit 2/45 falham, dados 0/28 falham   DETECTADO
+F: 3 indisponíveis seguidos voltam a pausar a fila                  -> unit 0/45 falham, dados 1/28 falham   DETECTADO
+G: HTML de login lido como "sem e-mail" (resposta inválida)         -> unit 1/45 falham, dados 1/28 falham   DETECTADO
+H: o Comment volta a consultar a rota web                           -> unit 1/45 falham, dados 22/28 falham  DETECTADO
+Resultado: 8 de 8 defeitos detectados. (A parada em cooldown também é coberta pelos cenários de Chromium
+primeiro_429, verificacao_429, pausa_compartilhada e pausa_1259_1313, que passaram.)

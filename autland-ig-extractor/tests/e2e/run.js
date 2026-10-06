@@ -4,30 +4,25 @@ const H = require('./harness');
 const fs = require('fs'), os = require('os'), path = require('path');
 const PIXEL = H.PIXEL;
 
-function userBody(username, pk, extra) {
-  const user = Object.assign({
-    id: String(pk), username, full_name: 'Nome ' + username, biography: '', bio_links: [], external_url: null,
-    edge_followed_by: { count: 1500 }, edge_follow: { count: 300 }, edge_owner_to_timeline_media: { count: 42 },
-    is_private: false, is_verified: false, profile_pic_url: PIXEL, profile_pic_url_hd: PIXEL,
-  }, extra || {});
-  return { status: 200, body: { data: { user }, status: 'ok' } };
-}
+// Comment mode asks /api/v1/users/{id}/info/: the answer is { user: {...}, status: 'ok' } (see mobileUser below).
 const F = {
-  personalOmitted: (u, pk) => () => userBody(u, pk, { is_business_account: false, is_professional_account: false, biography: 'contato: pessoal@gmail.com' }),
-  personalNull: (u, pk) => () => userBody(u, pk, { is_business_account: false, is_professional_account: false, business_email: null, business_phone_number: null, should_show_public_contacts: false }),
-  businessFound: (u, pk, email) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, business_email: email, business_contact_method: 'UNKNOWN', should_show_public_contacts: true, biography: 'bio email: outro@bio.com', category_name: 'Loja' }),
-  creatorNull: (u, pk) => () => userBody(u, pk, { is_business_account: false, is_professional_account: true, business_email: null, should_show_public_contacts: true }),
-  businessHidden: (u, pk, email) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, business_email: email, should_show_public_contacts: false }),
-  businessEmpty: (u, pk) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, business_email: '', should_show_public_contacts: true }),
-  businessOmitted: (u, pk) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, biography: 'email na bio: bio@empresa.com' }),
-  businessWithheld: (u, pk) => () => userBody(u, pk, { is_business_account: true, is_professional_account: true, should_show_public_contacts: true, business_contact_method: 'CALL', business_email: null, business_phone_number: null, business_address_json: '{"city_name": "Sao Paulo"}', biography: 'orçamentos: bio@loja.com' }),
-  creatorOmitted: (u, pk) => () => userBody(u, pk, { is_business_account: false, is_professional_account: true }),
-  userNull: () => () => ({ status: 200, body: { data: { user: null }, status: 'ok' } }),
+  personalOmitted: (u, pk) => () => mobileUser(pk, u, { account_type: 1, is_business: false, biography: 'contato: pessoal@gmail.com' }),
+  personalNull: (u, pk) => () => mobileUser(pk, u, { account_type: 1, is_business: false, public_email: '', should_show_public_contacts: false }),
+  businessFound: (u, pk, email) => () => mobileUser(pk, u, { account_type: 2, is_business: true, public_email: email, business_contact_method: 'UNKNOWN', should_show_public_contacts: true, biography: 'bio email: outro@bio.com', category: 'Loja' }),
+  creatorNull: (u, pk) => () => mobileUser(pk, u, { account_type: 3, is_business: false, public_email: '', should_show_public_contacts: true }),
+  businessHidden: (u, pk, email) => () => mobileUser(pk, u, { account_type: 2, is_business: true, public_email: email, should_show_public_contacts: false }),
+  businessEmpty: (u, pk) => () => mobileUser(pk, u, { account_type: 2, is_business: true, public_email: '', should_show_public_contacts: true }),
+  businessOmitted: (u, pk) => () => mobileUser(pk, u, { account_type: 2, is_business: true, biography: 'email na bio: bio@empresa.com' }),
+  businessWithheld: (u, pk) => () => mobileUser(pk, u, { account_type: 2, is_business: true, should_show_public_contacts: true, business_contact_method: 'CALL', public_email: '', business_phone_number: null, business_address_json: '{"city_name": "Sao Paulo"}', biography: 'orçamentos: bio@loja.com' }),
+  creatorOmitted: (u, pk) => () => mobileUser(pk, u, { account_type: 3, is_business: false }),
+  userNull: () => () => ({ status: 404, body: { message: 'User not found', status: 'fail' } }),
   rate429: (retryAfter) => () => ({ status: 429, headers: retryAfter ? { 'retry-after': String(retryAfter) } : {}, body: { message: 'Please wait a few minutes before you try again.', status: 'fail' } }),
   forbidden: () => () => ({ status: 403, body: { message: 'login_required', status: 'fail' } }),
+  forbiddenPlain: () => () => ({ status: 403, body: { message: 'Forbidden', status: 'fail' } }),
+  serverError: () => () => ({ status: 503, body: { message: 'service unavailable', status: 'fail' } }),
   redirectLogin: () => () => ({ status: 302, headers: { location: 'https://www.instagram.com/accounts/login/?next=%2F' }, contentType: 'text/html', body: '' }),
   htmlLogin: () => () => ({ status: 200, contentType: 'text/html', body: '<!DOCTYPE html><html><body>Login • Instagram</body></html>' }),
-  mismatch: (u, pk) => () => userBody(u + '_novo', pk + 1000, { is_business_account: true, is_professional_account: true, business_email: 'naoaplicar@empresa.com' }),
+  mismatch: (u, pk) => () => mobileUser(pk + 1000, u + '_novo', { account_type: 2, is_business: true, public_email: 'naoaplicar@empresa.com' }),
 };
 
 const results = [];
@@ -58,10 +53,10 @@ function commonChecks(scn, log) {
     check(scn, 'detalhe com app-id web e sem troca de User-Agent', infoReqs(log).every((e) => e.headers['x-ig-app-id'] === '936619743392459' && !/Instagram \d|Android/.test(e.headers['user-agent'] || '')));
     return;
   }
-  check(scn, 'nenhuma chamada a /users/{id}/info/', !log.some((e) => e.kind === 'FORBIDDEN_users_info'));
+  check(scn, 'nenhuma chamada a web_profile_info (o Comment pergunta só /users/{id}/info/)', !log.some((e) => e.kind === 'FORBIDDEN_web_profile_info'), log.filter((e) => e.kind === 'FORBIDDEN_web_profile_info').map((e) => e.url).slice(0, 3));
   check(scn, 'nenhum host externo não simulado', !log.some((e) => e.kind === 'blocked'), log.filter((e) => e.kind === 'blocked').map((e) => e.url).slice(0, 5));
   check(scn, 'intervalo >= 10 s entre consultas de perfil', spacingOk(log), profileReqs(log).map((e) => e.t));
-  check(scn, 'X-IG-App-ID web padrão, sem troca de host', profileReqs(log).every((e) => e.headers['x-ig-app-id'] === '936619743392459'));
+  check(scn, 'mesma rota e mesma sessão dos outros modos: /users/{id}/info/, X-IG-App-ID padrão, cabeçalhos csrf e claim da sessão, sem troca de host', profileReqs(log).every((e) => e.headers['x-ig-app-id'] === '936619743392459' && /^\/api\/v1\/users\/\d+\/info\/?$/.test(e.path || '') && e.credentials && e.credentials.csrfHeader && e.credentials.withClaimHeader), profileReqs(log).slice(0, 2).map((e) => [e.path, e.credentials]));
 }
 
 async function open(extDir, label, scenario) {
@@ -77,6 +72,8 @@ async function open(extDir, label, scenario) {
     catch (e) { if (i >= 20) throw e; await page.waitForTimeout(1000); }
   }
   await page.waitForTimeout(2500);
+  // The product default is 15-30 s per profile (scenario ritmo_padrao); the others use the 10 s floor.
+  if (!scenario.defaultPacing) await page.evaluate(() => chrome.storage.local.set({ intervals: [10, 10] }));
   return { ctx, id, page, log, consoleErrors };
 }
 const settled = (s) => s.isComplete || (s.isPaused && !s.detailCycle);
@@ -179,7 +176,6 @@ const SCENARIOS = {
       pessoal_x: F.personalOmitted('pessoal_x', 31), loja_om1: F.businessOmitted('loja_om1', 32),
       loja_om2: F.businessOmitted('loja_om2', 33), criador_om: F.creatorOmitted('criador_om', 34),
       loja_om4: F.businessOmitted('loja_om4', 35),
-      controle_loja: F.businessFound('controle_loja', 39, 'vendas@controle.com.br'),
     };
     const o = await open(extDir, 'omit', { comments, profiles });
     await H.clickButton(o.page, 'Iniciar');
@@ -190,23 +186,14 @@ const SCENARIOS = {
     await o.page.waitForTimeout(4000);
     const afterReload = await H.snapshot(o.page);
     const startEnabledAfterReload = await o.page.locator('button', { hasText: 'Iniciar' }).first().isEnabled().catch(() => null);
-    // Manual single-profile verification on a known commercial profile (simulated).
-    let probe = null;
-    const probeInput = o.page.locator('input[placeholder*="perfil"]').first();
-    if (await probeInput.count()) {
-      await probeInput.fill('@controle_loja');
-      await H.clickButton(o.page, 'Verificar 1 perfil');
-      probe = await H.waitFor(o.page, (x) => profileReqs(o.log).some((e) => e.username === 'controle_loja') && x.notifications.some((n) => /Diagnóstico de 1 consulta/.test(n)), { timeout: 60000 });
-    }
-    const startEnabledAfterProbe = await o.page.locator('button', { hasText: 'Iniciar' }).first().isEnabled().catch(() => null);
-    const diag = await o.page.locator('textarea').first().inputValue().catch(() => '');
+        const diag = await o.page.evaluate(`(() => { const vm = ${H.findVmSource()}; return vm.contactDiagnosticText; })()`);
     await o.ctx.close();
-    return { scn, s, afterReload, startEnabledAfterReload, probe, startEnabledAfterProbe, diag, continueClicked, toasts, reqsBefore, reqsAfterContinue, log: o.log, errors: o.consoleErrors };
+    return { scn, s, afterReload, startEnabledAfterReload, diag, continueClicked, toasts, reqsBefore, reqsAfterContinue, log: o.log, errors: o.consoleErrors };
   },
-  async falha_acesso(extDir, label, kind) {
+async falha_acesso(extDir, label, kind) {
     const scn = label + ':falha_' + kind;
     const comments = [{ pk: 51, username: 'perfil_falha' }, { pk: 52, username: 'perfil_seguinte' }];
-    const fx = { http403: F.forbidden(), redirect: F.redirectLogin(), html: F.htmlLogin() }[kind];
+    const fx = { http403: F.forbidden(), html: F.htmlLogin(), negado: F.forbiddenPlain(), http503: F.serverError() }[kind];  // a login redirect is followed by the browser and arrives as the login page (html)
     const profiles = { perfil_falha: fx, perfil_seguinte: F.businessFound('perfil_seguinte', 52, 's@x.com') };
     const o = await open(extDir, 'acc', { comments, profiles });
     await H.clickButton(o.page, 'Iniciar');
@@ -232,38 +219,42 @@ const SCENARIOS = {
     await o.ctx.close();
     return { scn, s, xlsx, afterReload, startEnabledAfterReload, log: o.log, errors: o.consoleErrors };
   },
-  async verificacao_429(extDir, label) {
+    async verificacao_429(extDir, label) {
+    // "Validar 1 perfil pendente" gets a 429: exactly one request, the pause is saved, nothing else leaves.
     const scn = label + ':verificacao_429';
-    const comments = [{ pk: 61, username: 'fila_a' }];
-    const profiles = { controle: F.rate429(300), fila_a: F.businessFound('fila_a', 61, 'a@fila.com') };
+    const comments = [{ pk: 61, username: 'fila_a' }, { pk: 62, username: 'fila_b' }];
+    const profiles = { fila_a: F.rate429(300), fila_b: F.businessFound('fila_b', 62, 'b@fila.com') };
     const o = await open(extDir, 'p429', { comments, profiles });
-    await o.page.locator('input[placeholder*="perfil"]').first().fill('controle');
-    await H.clickButton(o.page, 'Verificar 1 perfil');
-    let s = await H.waitFor(o.page, (x) => profileReqs(o.log).length >= 1 && !/Consultando/.test(x.bodyText) && x.retryAfterUntil, { timeout: 40000 });
-    const probeDisabled = await o.page.locator('button', { hasText: 'Verificar 1 perfil' }).first().isDisabled();
-    void s;
-    const startDisabled = await o.page.locator('button', { hasText: 'Iniciar' }).first().isDisabled();
+    await H.clickButton(o.page, 'Iniciar');
+    await H.waitFor(o.page, (x) => x.rows.length === 2, { timeout: 90000, every: 500 });
+    await H.clickButton(o.page, 'Pause').catch(() => false);
+    await o.page.waitForTimeout(1500);
+    const reqsBefore = profileReqs(o.log).length;
+    await H.clickButton(o.page, 'Validar 1 perfil pendente');
+    let s = await H.waitFor(o.page, (x) => profileReqs(o.log).length > reqsBefore && x.retryAfterUntil, { timeout: 60000 });
+    await o.page.waitForTimeout(1500);
+    const probeDisabled = await o.page.locator('button', { hasText: 'Validar 1 perfil pendente' }).first().isDisabled();
+        const reqsAtPause = profileReqs(o.log).length;
+    const continueClicked = await H.clickButton(o.page, 'Continue').catch(() => false);
     await o.page.waitForTimeout(15000);
     s = await H.snapshot(o.page);
-    const diag = await o.page.locator('textarea').first().inputValue().catch(() => '');
+    const startDisabled = profileReqs(o.log).length === reqsAtPause;
+    const diag = await o.page.evaluate(`(() => { const vm = ${H.findVmSource()}; return vm.contactDiagnosticText; })()`);
     await o.ctx.close();
-    return { scn, s, probeDisabled, startDisabled, diag, log: o.log, errors: o.consoleErrors };
+    return { scn, s, probeDisabled, startDisabled, diag, reqsBefore, log: o.log, errors: o.consoleErrors };
   },
   async tres_indisponiveis(extDir, label) {
+    // Deleted commenters (404) are row results: three in a row do not stop the queue.
     const scn = label + ':tres_indisponiveis';
     const comments = [{ pk: 71, username: 'sumiu1' }, { pk: 72, username: 'sumiu2' }, { pk: 73, username: 'sumiu3' }, { pk: 74, username: 'loja_depois' }];
     const profiles = { sumiu1: F.userNull(), sumiu2: F.userNull(), sumiu3: F.userNull(), loja_depois: F.businessFound('loja_depois', 74, 'depois@loja.com') };
     const o = await open(extDir, 'tri', { comments, profiles });
     await H.clickButton(o.page, 'Iniciar');
-    const paused = await H.waitFor(o.page, (x) => profileReqs(o.log).length >= 3 && x.isPaused && !x.detailCycle, { timeout: 90000 });
-    await o.page.waitForTimeout(15000);
-    const reqsWhilePaused = profileReqs(o.log).length;
-    const resumed = await H.clickButton(o.page, 'Continue');
-    const s = await H.waitFor(o.page, (x) => x.rows.length === 4 && x.rows.every((r) => r.detailLoaded), { timeout: 60000 });
+    const s = await H.waitFor(o.page, (x) => x.rows.length === 4 && x.rows.every((r) => r.detailLoaded) && x.isComplete, { timeout: 120000, every: 2000 });
     await o.ctx.close();
-    return { scn, s, paused, reqsWhilePaused, resumed, log: o.log, errors: o.consoleErrors };
+    return { scn, s, log: o.log, errors: o.consoleErrors };
   },
-  async pausa_compartilhada(extDir, label) {
+async pausa_compartilhada(extDir, label) {
     // Outro dashboard salva a pausa: Iniciar não pode disparar nenhuma consulta.
     const scn = label + ':pausa_compartilhada';
     const comments = [{ pk: 91, username: 'loja_p' }];
@@ -434,7 +425,8 @@ const SCENARIOS = {
     const s1 = await H.waitFor(o.page, (x) => profileReqs(o.log).length >= 2 && x.isPaused && !x.detailCycle, { timeout: 120000 });
     await o.page.waitForTimeout(5000);
     const historyS1 = Object.assign({}, o.log.historyState);
-    const reqs1 = profileReqs(o.log).map((e) => e.username);
+        const reqs1 = profileReqs(o.log).map((e) => e.username);
+    const commentReqs1 = o.log.filter((e) => e.kind === 'comments').length;
     scenario.resumeHistory = true;
     await o.page.goto(`chrome-extension://${o.id}/dashboard.html#/?ins=POSTTEST&type=4&history=histTest`);
     await o.page.reload();
@@ -446,7 +438,7 @@ const SCENARIOS = {
     const s2 = await H.waitFor(o.page, (x) => x.isComplete || (x.isPaused && !x.detailCycle && Date.now() - (profileReqs(o.log).slice(-1)[0] || { t: 0 }).t > 30000), { timeout: 150000, every: 2000 });
     const stored = Object.entries(s2.storage).filter(([k]) => /^extract_list_/.test(k)).map(([, v]) => v)[0] || [];
     await o.ctx.close();
-    return { scn, s: s2, s1, resumed, reqs1, stored, historyS1, startClicked, log: o.log, errors: o.consoleErrors };
+        return { scn, s: s2, s1, resumed, reqs1, commentReqs1, stored, historyS1, startClicked, log: o.log, errors: o.consoleErrors };
   },
   async lista_inexistente(extDir, label) {
     const key = 'userlist-2-20261005000001';
@@ -548,9 +540,9 @@ const SCENARIOS = {
       const startDisabled = await start.isDisabled().catch(() => null);
       if (startDisabled === false) await start.click().catch(() => {});
       // The manual check, through the UI and through its handler directly.
-      const probe = p.locator('button', { hasText: 'Verificar 1 perfil' }).first();
+            const probe = p.locator('button', { hasText: 'Validar 1 perfil pendente' }).first();
       const probeDisabled = await probe.isDisabled().catch(() => null);
-      await p.evaluate(`(() => { const vm = ${H.findVmSource()}; vm.contactProbeUsername = 'djrolandgonzales'; return vm.handleContactProbe(); })()`).catch(() => {});
+      await p.evaluate(`(() => { const vm = ${H.findVmSource()}; return vm.handleContactProbe(); })()`).catch(() => {});
       await p.waitForTimeout(2500);
       return { paused: snap.isPaused, startDisabled, probeDisabled, stored: Number(snap.storage.ig_contact_cooldown_until) || 0, text: snap.bodyText };
     };
@@ -683,6 +675,41 @@ const SCENARIOS = {
     await o.ctx.close();
     return { scn, s, s1, reqs1, reqs2, seconds, log: o.log, errors: o.consoleErrors };
   },
+    async validacao_inicial(extDir, label) {
+    // The first answer of a run is shown as a card; "Validar 1 perfil pendente" asks ONE profile and the queue reuses it.
+    const scn = label + ':validacao_inicial';
+    const comments = [{ pk: 151, username: 'val_a' }, { pk: 152, username: 'val_b' }, { pk: 153, username: 'val_c' }];
+    const profiles = { val_a: F.businessFound('val_a', 151, 'valida@loja.com.br'), val_b: F.businessEmpty('val_b', 152), val_c: F.personalOmitted('val_c', 153) };
+    const o = await open(extDir, 'val', { comments, profiles });
+    await H.clickButton(o.page, 'Iniciar');
+    await H.waitFor(o.page, (x) => x.rows.length === 3, { timeout: 90000, every: 500 });
+    await H.clickButton(o.page, 'Pause').catch(() => false);
+    await o.page.waitForTimeout(1500);
+    const before = profileReqs(o.log).length;
+    const pendingBefore = (await H.snapshot(o.page)).rows.map((x) => x.state);
+    const probeEnabled = await o.page.locator('button', { hasText: 'Validar 1 perfil pendente' }).first().isEnabled().catch(() => null);
+    await H.clickButton(o.page, 'Validar 1 perfil pendente');
+    const afterProbe = await H.waitFor(o.page, (x) => profileReqs(o.log).length > before && x.notifications.some((n) => /Validação de 1 consulta/.test(n)), { timeout: 60000 });
+    await o.page.waitForTimeout(2500);
+    const probeReqs = profileReqs(o.log).length - before;
+    const card = afterProbe.notifications.find((n) => /Validação de 1 consulta/.test(n)) || '';
+    const rowAfterProbe = (await H.snapshot(o.page)).rows[0];
+    await H.clickButton(o.page, 'Continue');
+    const s = await H.waitFor(o.page, (x) => x.isComplete && x.rows.every((r) => r.detailLoaded), { timeout: 150000, every: 2000 });
+    await o.ctx.close();
+    return { scn, s, pendingBefore, probeEnabled, probeReqs, card, rowAfterProbe, log: o.log, errors: o.consoleErrors };
+  },
+  async ritmo_padrao(extDir, label) {
+    // No saved interval: the same 15-30 s default as the other modes (the other scenarios seed 10 s).
+    const scn = label + ':ritmo_padrao';
+    const comments = [{ pk: 161, username: 'rit_a' }, { pk: 162, username: 'rit_b' }, { pk: 163, username: 'rit_c' }];
+    const profiles = { rit_a: F.businessEmpty('rit_a', 161), rit_b: F.businessEmpty('rit_b', 162), rit_c: F.businessEmpty('rit_c', 163) };
+    const o = await open(extDir, 'rit', { comments, profiles, defaultPacing: true });
+    await H.clickButton(o.page, 'Iniciar');
+    const s = await H.waitFor(o.page, (x) => x.isComplete && x.rows.every((r) => r.detailLoaded), { timeout: 300000, every: 3000 });
+    await o.ctx.close();
+    return { scn, s, log: o.log, errors: o.consoleErrors };
+  },
   async identidade(extDir, label) {
     const scn = label + ':identidade';
     const comments = [{ pk: 41, username: 'renomeado' }, { pk: 42, username: 'loja_ok' }];
@@ -712,19 +739,21 @@ function assess(label, r) {
     check(scn, 'único e-mail = campo comercial (bio ignorada)', JSON.stringify(s.emailList) === JSON.stringify(['contato@lojaexemplo.com.br']), s.emailList);
     check(scn, 'e-mail oculto não coletado', !s.rows.some((x) => x.email === 'oculto@empresa.com'));
     check(scn, 'textos distintos: vazio/oculto/pessoal/indisponível/encontrado', new Set(s.rows.map((x) => x.text)).size >= 5, s.rows.map((x) => x.text));
-    check(scn, 'sem método de contato anunciado, nada é rotulado como retido', !s.rows.some((x) => x.status === 'not_delivered'));
+    check(scn, 'estado de cada linha: email_found / no_public_email / profile_unavailable', byUser.loja_com_email.state === 'email_found' && ['pessoal_sem_campo', 'criador_nulo', 'loja_oculta', 'loja_vazia', 'pessoal_nulo'].every((u) => byUser[u].state === 'no_public_email') && byUser.conta_apagada.state === 'profile_unavailable', s.rows.map((x) => [x.user, x.state]));
+    check(scn, 'textos: "E-mail comercial encontrado" e "Perfil não disponibiliza e-mail público" (nada de contato retido)', byUser.loja_com_email.text === 'E-mail comercial encontrado' && /^Perfil não disponibiliza e-mail público/.test(byUser.loja_vazia.text) && !s.rows.some((x) => /retid|não entregue/i.test(x.text)), s.rows.map((x) => x.text));
     check(scn, 'perfil apagado preserva nome do comentário', byUser.conta_apagada && byUser.conta_apagada.user === 'conta_apagada');
     const emailCol = (csv) => { const rows = parseCsv(csv); const i = rows[0].indexOf('E-mail comercial'); return rows.slice(1).map((x) => x[i]).filter((v) => v !== undefined); };
     check(scn, 'CSV de e-mails: coluna "E-mail comercial" só com o contato comercial', JSON.stringify(emailCol(r.csvEmail)) === JSON.stringify(['contato@lojaexemplo.com.br']), emailCol(r.csvEmail));
     check(scn, 'CSV completo: coluna de e-mail sem bio/oculto/pessoal', emailCol(r.csvAll).filter(Boolean).join() === 'contato@lojaexemplo.com.br', emailCol(r.csvAll));
-    check(scn, 'CSV completo tem 7 linhas e coluna de status', r.csvAll.trim().split('\n').length === 8 && /Status do e-mail/.test(r.csvAll) && /Contato oculto/.test(r.csvAll) && /Campo comercial vazio/.test(r.csvAll) && !/não entregue pela consulta web/.test(r.csvAll), r.csvAll.split('\n').slice(0, 3));
+    check(scn, 'CSV completo tem 7 linhas e coluna de status', r.csvAll.trim().split('\n').length === 8 && /Status do e-mail/.test(r.csvAll) && /contato oculto pelo perfil/.test(r.csvAll) && /campo vazio/.test(r.csvAll) && /E-mail comercial encontrado/.test(r.csvAll) && !/não entregue|retid/i.test(r.csvAll), r.csvAll.split('\n').slice(0, 3));
     const sheets = r.xlsx || {};
     const diag = sheets['Diagnostico contato'] || [];
     const hdr = diag[0] || [];
     const rowOf = (u) => diag.find((x) => x[0] === '@' + u) || [];
     const col = (name) => hdr.indexOf(name);
     check(scn, 'XLSX: aba de dados + 2 abas de diagnóstico automáticas', Object.keys(sheets).length === 3 && sheets['Respostas reais'] && diag.length === 8, Object.keys(sheets));
-    check(scn, 'XLSX diagnóstico: campo omitido x nulo x vazio por perfil', rowOf('pessoal_sem_campo')[col('business_email')] === 'absent' && rowOf('criador_nulo')[col('business_email')] === 'null' && rowOf('loja_vazia')[col('business_email')] === 'empty' && rowOf('loja_com_email')[col('business_email')] === 'valid', { hdr, sample: diag.slice(1, 4) });
+    check(scn, 'XLSX diagnóstico: public_email ausente x vazio x preenchido por perfil', rowOf('pessoal_sem_campo')[col('public_email')] === 'absent' && rowOf('criador_nulo')[col('public_email')] === 'empty' && rowOf('loja_vazia')[col('public_email')] === 'empty' && rowOf('loja_com_email')[col('public_email')] === 'valid', { hdr, sample: diag.slice(1, 4) });
+    check(scn, 'XLSX diagnóstico: coluna "Estado do contato" com os estados', rowOf('loja_com_email')[col('Estado do contato')] === 'email_found' && rowOf('loja_vazia')[col('Estado do contato')] === 'no_public_email' && rowOf('conta_apagada')[col('Estado do contato')] === 'profile_unavailable', diag.slice(1, 3));
     check(scn, 'XLSX diagnóstico: sinal de contato oculto registrado', rowOf('loja_oculta')[col('should_show_public_contacts')] === 'false' && /oculto/i.test(rowOf('loja_oculta')[col('Status do e-mail')]));
     check(scn, 'XLSX diagnóstico: sem e-mail completo nas abas de diagnóstico', !JSON.stringify([diag, sheets['Respostas reais']]).includes('contato@lojaexemplo.com.br'));
     check(scn, 'XLSX dados: coluna E-mail comercial só com o contato do campo', (() => { const d = sheets.all || []; const i = (d[0] || []).indexOf('E-mail comercial'); return d.slice(1).map((x) => x[i]).filter(Boolean).join() === 'contato@lojaexemplo.com.br'; })());
@@ -744,20 +773,20 @@ function assess(label, r) {
   }
   if (/omitidos_profissionais/.test(scn)) {
     console.log('--- diagnóstico copiado (simulado) ---\n' + r.diag + '\n---');
-    check(scn, '4 profissionais sem campo + 1 pessoal: a fila NÃO para (5 consultas) e conclui', profileReqs(log).filter((e) => e.username !== 'controle_loja').map((e) => e.username).join() === 'pessoal_x,loja_om1,loja_om2,criador_om,loja_om4' && s.isComplete === true, { reqs: profileReqs(log).map((e) => e.username), done: s.isComplete });
+    check(scn, '4 profissionais sem campo + 1 pessoal: a fila NÃO para (5 consultas) e conclui', profileReqs(log).map((e) => e.username).join() === 'pessoal_x,loja_om1,loja_om2,criador_om,loja_om4' && s.isComplete === true, { reqs: profileReqs(log).map((e) => e.username), done: s.isComplete });
     check(scn, 'status: pessoal / omitido x4', byUser.pessoal_x.status === 'not_professional' && ['loja_om1', 'loja_om2', 'criador_om', 'loja_om4'].every((u) => byUser[u].status === 'omitted'));
     check(scn, 'e-mail da bio não usado', !s.rows.some((x) => x.email));
     check(scn, 'nenhuma parada salva: após recarregar, Iniciar habilitado', r.afterReload.commercialContactUnavailable === false && r.startEnabledAfterReload === true, { unavailable: r.afterReload.commercialContactUnavailable, start: r.startEnabledAfterReload });
-    check(scn, 'diagnóstico de 1 clique executou 1 consulta', profileReqs(log).filter((e) => e.username === 'controle_loja').length === 1);
-    const card = r.probe ? (r.probe.notifications.find((n) => /Diagnóstico de 1 consulta/.test(n)) || '') : '';
-    check(scn, 'diagnóstico de 1 clique mostra rota, HTTP 200 e caminhos de e-mail', /@controle_loja/.test(card) && /GET \/api\/v1\/users\/web_profile_info\//.test(card) && /HTTP 200/.test(card) && /data\.user\.business_email=texto/.test(card) && /Contato público do Instagram/.test(card), card.slice(0, 400));
-    check(scn, 'diagnóstico de 1 clique não mostra o e-mail, cookie nem token', !/vendas@controle|csrf|sessionid|ds_user_id|cookie|token/i.test(card), card.slice(0, 200));
-    check(scn, 'diagnóstico mostra HTTP 200, campo e tipo', /HTTP 200/.test(r.diag) && /business_email=valid/.test(r.diag) && /business/.test(r.diag) && /campos de e-mail recebidos: [^\n]*data\.user\.business_email=texto/.test(r.diag), r.diag.slice(0, 400));
+    
+    check(scn, 'diagnóstico mostra a rota, HTTP 200, o estado e a decisão do parser', /\/api\/v1\/users\/\{id\}\/info\//.test(r.diag) && /HTTP 200/.test(r.diag) && /estado=no_public_email/.test(r.diag) && /decisão=no_public_email \(omitted\)/.test(r.diag) && /public_email=absent/.test(r.diag), r.diag.slice(0, 500));
     check(scn, 'diagnóstico não fala em contato retido', !/retid|retém/i.test(r.diag));
-    check(scn, 'verificação não adiciona linha à tabela', r.probe && r.probe.rows.length === r.afterReload.rows.length, { before: r.afterReload.rows.length, after: r.probe && r.probe.rows.length });
+    
   }
   if (/falha_/.test(scn)) {
-    const code = { http403: 'access', redirect: 'redirect', html: 'invalid_response' }[r.kind];
+    const code = { http403: 'login_required', html: 'login_required', negado: 'access_denied', http503: 'temporary' }[r.kind];
+    const state = { http403: 'login_required', html: 'login_required', negado: 'access_denied', http503: 'temporary_error' }[r.kind];
+    const text = { http403: 'Sessão precisa ser verificada', html: 'Sessão precisa ser verificada', negado: 'Acesso negado pelo Instagram', http503: 'Falha temporária na consulta' }[r.kind];
+    check(scn, `estado ${state} e texto "${text}" (nunca "sem e-mail")`, s.rows[0] && s.rows[0].state === state && s.rows[0].text.indexOf(text) === 0 && !s.rows[0].detailLoaded, s.rows[0]);
     check(scn, 'parou após 1 consulta, sem repetição automática', profileReqs(log).length === 1 && s.isPaused, profileReqs(log).length);
     check(scn, `linha marcada com falha (${code})`, s.rows[0] && s.rows[0].failure && s.rows[0].failure.code === code && !s.rows[0].detailLoaded, s.rows[0] && s.rows[0].failure);
     check(scn, 'próximo perfil não consultado', !profileReqs(log).some((e) => e.username === 'perfil_seguinte'));
@@ -842,7 +871,9 @@ function assess(label, r) {
     check(scn, 'histórico da sessão 1 conta só o perfil consultado (1), não os 3 listados', r.historyS1.scrapedCount === 1 && !r.historyS1.isFromComplete, { scrapedCount: r.historyS1.scrapedCount, done: r.historyS1.isFromComplete });
     check(scn, 'Iniciar habilitado depois da pausa', r.startClicked === true);
     check(scn, 'sessão 2 consulta só os pendentes (sem repetir ret_um)', reqs2.join() === 'ret_dois,ret_tres', reqs2);
-    check(scn, 'retomada conclui a tarefa', s.isComplete === true, { isComplete: s.isComplete, paused: s.isPaused });
+        check(scn, 'retomada conclui a tarefa', s.isComplete === true, { isComplete: s.isComplete, paused: s.isPaused });
+    check(scn, 'fila salva: a retomada não relê nenhuma página de comentários', log.filter((e) => e.kind === 'comments').length === r.commentReqs1, { before: r.commentReqs1, total: log.filter((e) => e.kind === 'comments').length });
+    check(scn, 'cada perfil consultado no máximo 2 vezes no total (só o que recebeu 429 repete)', log.filter((e) => e.kind === 'profile' && e.username === 'ret_um').length === 1 && log.filter((e) => e.kind === 'profile' && e.username === 'ret_dois').length === 2, profileReqs(log).map((e) => e.username));
     const names = r.stored.map((x) => x.userName).sort();
     check(scn, 'histórico local com os 3 perfis, sem duplicar', JSON.stringify(names) === JSON.stringify(['ret_dois', 'ret_tres', 'ret_um']) && r.stored.every((x) => x.detailLoaded), names);
     check(scn, 'e-mails dos 3 perfis preservados no histórico', r.stored.filter((x) => x.email).length === 3, r.stored.map((x) => x.email));
@@ -874,7 +905,7 @@ function assess(label, r) {
       check(scn, `${k}: ZERO consultas ao Instagram durante a pausa`, v.reqs === 0, v.reqs);
       if (k !== 'varias_abas') {
         check(scn, `${k}: pausa conservada (até 13:59) e coleta pausada`, v.paused === true && v.stored === o.first.stored, { paused: v.paused, stored: v.stored && brt(v.stored) });
-        check(scn, `${k}: Iniciar e "Verificar 1 perfil" bloqueados`, v.startDisabled === true && v.probeDisabled === true, { start: v.startDisabled, probe: v.probeDisabled });
+        check(scn, `${k}: Iniciar e "Validar 1 perfil pendente" bloqueados`, v.startDisabled === true && v.probeDisabled === true, { start: v.startDisabled, probe: v.probeDisabled });
       }
     }
     check(scn, 'reaberto às 13:13:06 (relógio da página)', brt(o.steps.reaberto.now).startsWith('13:13'), brt(o.steps.reaberto.now));
@@ -916,7 +947,7 @@ function assess(label, r) {
   if (/retido_pela_web/.test(scn)) {
     const users = profileReqs(log).map((e) => e.username);
     check(scn, 'CALL com e-mail nulo não para a fila: 5 consultas e extração concluída', users.join() === 'pessoal_r,loja_r1,loja_r2,loja_r3,loja_r4' && s.isComplete === true, { users, done: s.isComplete });
-    check(scn, 'status "Campo comercial vazio" (sem rótulo de retenção)', ['loja_r1', 'loja_r2', 'loja_r3', 'loja_r4'].every((u) => byUser[u].status === 'empty' && byUser[u].text === 'Campo comercial vazio'), s.rows.map((x) => [x.user, x.status, x.text]));
+    check(scn, 'status "Perfil não disponibiliza e-mail público · campo vazio" (sem rótulo de retenção)', ['loja_r1', 'loja_r2', 'loja_r3', 'loja_r4'].every((u) => byUser[u].status === 'empty' && byUser[u].text === 'Perfil não disponibiliza e-mail público · campo vazio' && byUser[u].state === 'no_public_email'), s.rows.map((x) => [x.user, x.status, x.text]));
     check(scn, 'e-mail da bio não usado', !s.rows.some((x) => x.email));
     check(scn, 'nenhum aviso ou texto de contato retido', !s.notifications.some((n) => /retém|retid/i.test(n)) && !/retém|retid/i.test(s.bodyText), s.notifications);
     const lines = JSON.stringify(r.xlsx || {});
@@ -938,19 +969,36 @@ function assess(label, r) {
     check(scn, '1ª extração: 2 consultas', r.reqs1 === 2, r.reqs1);
     check(scn, '2ª extração (outro post): 0 consultas, mesmos resultados do cache', r.reqs2 === 0 && byUser.cache_loja && byUser.cache_loja.email === 'cache@loja.com' && byUser.cache_loja.status === 'found' && byUser.cache_pessoa.status === 'not_professional', { reqs2: r.reqs2, rows: s.rows.map((x) => [x.user, x.status, x.email]) });
     check(scn, '2ª extração conclui sem esperar 10 s por perfil', r.seconds < 20, r.seconds);
-    const cache = s.storage.ig_contact_profile_cache_v15 || {};
-    check(scn, 'cache salvo no navegador por perfil', cache['instagram_web_profile_info:cache_loja'] && cache['instagram_web_profile_info:cache_pessoa'], Object.keys(cache));
+        const cache = s.storage.ig_contact_profile_cache_v154 || {};
+    check(scn, 'cache salvo no navegador por user id', cache['131'] && cache['132'] && cache['131'].result.contactOutcome === 'found', Object.keys(cache));
+  }
+    if (/validacao_inicial/.test(scn)) {
+    check(scn, 'antes da validação todas as linhas estão "pending" e o botão está ativo', r.pendingBefore.length === 3 && r.pendingBefore.every((x) => x === 'pending') && r.probeEnabled === true, { states: r.pendingBefore, enabled: r.probeEnabled });
+    check(scn, 'a validação fez UMA consulta, a do 1º pendente (val_a)', r.probeReqs === 1 && profileReqs(log)[0].username === 'val_a', { reqs: r.probeReqs, first: profileReqs(log)[0] && profileReqs(log)[0].username });
+    check(scn, 'quadro: endpoint, HTTP 200, public_email, caminho e decisão do parser', /@val_a/.test(r.card) && /GET \/api\/v1\/users\/\{id\}\/info\//.test(r.card) && /HTTP 200 · Retry-After: não se aplica/.test(r.card) && /public_email: texto/.test(r.card) && /Caminho do campo: user\.public_email/.test(r.card) && /Decisão do parser: email_found \(public_email\) — E-mail comercial encontrado/.test(r.card) && /Horário:/.test(r.card), r.card.slice(0, 600));
+    check(scn, 'quadro: e-mail só mascarado, sem cookie, token ou cabeçalho', /E-mail \(mascarado\): v\*\*\*@loja\.com\.br/.test(r.card) && !/valida@loja|cookie|csrf|token|x-ig/i.test(r.card), r.card.slice(0, 300));
+    check(scn, 'a linha validada só é preenchida quando a fila chega nela', r.rowAfterProbe && r.rowAfterProbe.state === 'pending' && !r.rowAfterProbe.detailLoaded);
+    check(scn, 'depois de Continue: 3 consultas no total (o validado não foi repetido)', profileReqs(log).length === 3 && profileReqs(log).filter((e) => e.username === 'val_a').length === 1, profileReqs(log).map((e) => e.username));
+    check(scn, 'e-mail do val_a na tabela; os outros sem e-mail público; fila concluída', byUser.val_a.email === 'valida@loja.com.br' && byUser.val_a.state === 'email_found' && byUser.val_b.state === 'no_public_email' && byUser.val_c.state === 'no_public_email' && s.isComplete === true, s.rows.map((x) => [x.user, x.state, x.email]));
+  }
+  if (/ritmo_padrao/.test(scn)) {
+    const ts = profileReqs(log).map((e) => e.t), gaps = ts.slice(1).map((t, i) => t - ts[i]);
+    check(scn, 'sem intervalo salvo: 15–30 s entre perfis (o mesmo padrão dos outros modos)', gaps.length === 2 && gaps.every((g) => g >= 14900 && g <= 45000), gaps);
+    check(scn, '3 perfis, 3 consultas, fila concluída', profileReqs(log).length === 3 && s.isComplete === true);
   }
   if (/verificacao_429/.test(scn)) {
     const until = Number(s.storage.ig_contact_cooldown_until) || 0, reqAt = profileReqs(log)[0] ? profileReqs(log)[0].t : 0;
-    check(scn, 'verificação recebeu 429: 1 consulta, pausa salva pelo Retry-After', profileReqs(log).length === 1 && Math.abs(until - (reqAt + 300000)) < 5000, { reqs: profileReqs(log).length, until });
-    check(scn, 'durante a pausa: verificação e Iniciar desabilitados', r.probeDisabled === true && r.startDisabled === true);
-    check(scn, 'nenhuma consulta automática depois do 429', profileReqs(log).length === 1);
+        check(scn, 'validação recebeu 429: 1 consulta (a do 1º pendente), pausa salva pelo Retry-After', profileReqs(log).length === 1 && profileReqs(log)[0].username === 'fila_a' && Math.abs(until - (reqAt + 300000)) < 5000, { reqs: profileReqs(log).map((e) => e.username), until });
+    check(scn, 'durante a pausa: validação desabilitada e Continue não consulta nada', r.probeDisabled === true && r.startDisabled === true, { probeDisabled: r.probeDisabled, noNewRequests: r.startDisabled });
+    check(scn, 'zero consultas depois do 429 (nem o outro perfil, nem sozinho)', profileReqs(log).length === 1 && !profileReqs(log).some((e) => e.username === 'fila_b'));
+    check(scn, 'a linha continua pendente (não vira "sem e-mail")', s.rows.every((x) => !x.detailLoaded && x.state !== 'no_public_email'), s.rows.map((x) => [x.user, x.state]));
     check(scn, 'diagnóstico registra HTTP 429 e Retry-After', /HTTP 429/.test(r.diag) && /Retry-After=300/.test(r.diag), r.diag.slice(0, 300));
+    check(scn, 'o quadro de validação mostrou o 429', s.notifications.some((n) => /Validação de 1 consulta/.test(n) && /HTTP 429 · Retry-After: 300/.test(n)) || s.toasts.some((n) => /Validação de 1 consulta/.test(n) && /HTTP 429/.test(n)), s.toasts.concat(s.notifications).slice(0, 3));
   }
   if (/tres_indisponiveis/.test(scn)) {
-    check(scn, 'pausa após 3 indisponíveis seguidos', r.paused.isPaused && r.reqsWhilePaused === 3, { reqs: r.reqsWhilePaused });
-    check(scn, 'Continue retoma e segue para o próximo perfil', r.resumed && byUser.loja_depois && byUser.loja_depois.status === 'found' && profileReqs(log).length === 4);
+        check(scn, '3 indisponíveis seguidos NÃO pausam a fila: conclui com 4 consultas', s.isComplete === true && profileReqs(log).length === 4, { reqs: profileReqs(log).length, complete: s.isComplete });
+    check(scn, 'o próximo perfil é consultado e entrega o e-mail', byUser.loja_depois && byUser.loja_depois.status === 'found' && byUser.loja_depois.email === 'depois@loja.com');
+    check(scn, 'indisponíveis: estado profile_unavailable e texto "Perfil indisponível"', ['sumiu1', 'sumiu2', 'sumiu3'].every((u) => byUser[u].state === 'profile_unavailable' && byUser[u].text === 'Perfil indisponível'));
     check(scn, 'indisponíveis não são consultados de novo', ['sumiu1', 'sumiu2', 'sumiu3'].every((u) => profileReqs(log).filter((e) => e.username === u).length === 1));
   }
   if (/identidade/.test(scn)) {

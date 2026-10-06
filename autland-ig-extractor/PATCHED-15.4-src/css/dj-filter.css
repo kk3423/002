@@ -1,0 +1,149 @@
+/* DJ Filter Engine — Autland IG Extractor */
+
+/* HOT LEAD badge */
+.dj-hot-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #ff6b00, #ff0080);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  box-shadow: 0 2px 6px rgba(255, 60, 0, 0.5);
+  animation: dj-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dj-pulse {
+  0%, 100% { box-shadow: 0 2px 6px rgba(255, 60, 0, 0.5); }
+  50% { box-shadow: 0 2px 14px rgba(255, 60, 0, 0.85); }
+}
+
+/* Lead score bar */
+.dj-score-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 90px;
+}
+
+.dj-score-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #e8e8e8;
+  overflow: hidden;
+}
+
+.dj-score-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.dj-score-fill.high   { background: linear-gradient(90deg, #00c851, #007e33); }
+.dj-score-fill.medium { background: linear-gradient(90deg, #ffbb33, #ff8800); }
+.dj-score-fill.low    { background: #ccc; }
+
+.dj-score-num {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 26px;
+  text-align: right;
+}
+.dj-score-num.high   { color: #00a843; }
+.dj-score-num.medium { color: #e07000; }
+.dj-score-num.low    { color: #888; }
+
+/* Classification pill */
+.dj-class-pill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+.dj-class-DJ       { background: #1a1aff22; color: #1a1aff; border: 1px solid #1a1aff44; }
+.dj-class-Producer { background: #9000ff22; color: #7a00cc; border: 1px solid #9000ff44; }
+.dj-class-Label    { background: #00800022; color: #006000; border: 1px solid #00800044; }
+.dj-class-Promoter { background: #ff660022; color: #cc4400; border: 1px solid #ff660044; }
+.dj-class-Event    { background: #ff000022; color: #cc0000; border: 1px solid #ff000044; }
+.dj-class-Artist   { background: #0099ff22; color: #0066cc; border: 1px solid #0099ff44; }
+.dj-class-Unknown  { background: #88888815; color: #888; border: 1px solid #88888830; }
+
+/* DJ Filter toolbar panel */
+#dj-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #0d0d1a;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+#dj-filter-bar .dj-fb-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #a78bfa;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-right: 4px;
+}
+
+#dj-filter-bar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  user-select: none;
+}
+
+#dj-filter-bar input[type="checkbox"] {
+  accent-color: #a78bfa;
+  width: 14px;
+  height: 14px;
+}
+
+#dj-filter-bar input[type="range"] {
+  accent-color: #a78bfa;
+  width: 90px;
+}
+
+#dj-filter-bar .dj-score-label {
+  font-size: 12px;
+  color: #a78bfa;
+  font-weight: 700;
+  min-width: 26px;
+}
+
+#dj-filter-bar .dj-stat {
+  font-size: 11px;
+  color: #666;
+  margin-left: auto;
+}
+
+#dj-filter-bar .dj-mode-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid #3a3a6a;
+  background: #1a1a3a;
+  color: #a78bfa;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+#dj-filter-bar .dj-mode-btn:hover,
+#dj-filter-bar .dj-mode-btn.active {
+  background: #a78bfa;
+  color: #000;
+  border-color: #a78bfa;
+}
