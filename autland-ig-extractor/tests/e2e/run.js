@@ -694,10 +694,13 @@ async pausa_compartilhada(extDir, label) {
     const probeReqs = profileReqs(o.log).length - before;
     const card = afterProbe.notifications.find((n) => /Validação de 1 consulta/.test(n)) || '';
     const rowAfterProbe = (await H.snapshot(o.page)).rows[0];
+    // The board is in the panel: no button may be hidden under it (it used to be a 600x520 overlay over Continue/Export).
+    const covered = await H.coveredControls(o.page);
+    const board = await o.page.evaluate(() => { const c = document.querySelector('.contact-validation-card'); return c ? { inNotices: !!c.closest('.notices'), position: getComputedStyle(c).position, hasClose: !!c.querySelector('button.delete') } : null; });
     await H.clickButton(o.page, 'Continue');
     const s = await H.waitFor(o.page, (x) => x.isComplete && x.rows.every((r) => r.detailLoaded), { timeout: 150000, every: 2000 });
     await o.ctx.close();
-    return { scn, s, pendingBefore, probeEnabled, probeReqs, card, rowAfterProbe, log: o.log, errors: o.consoleErrors };
+    return { scn, s, pendingBefore, probeEnabled, probeReqs, card, rowAfterProbe, covered, board, log: o.log, errors: o.consoleErrors };
   },
   async ritmo_padrao(extDir, label) {
     // No saved interval: the same 15-30 s default as the other modes (the other scenarios seed 10 s).
@@ -975,8 +978,10 @@ function assess(label, r) {
     if (/validacao_inicial/.test(scn)) {
     check(scn, 'antes da validação todas as linhas estão "pending" e o botão está ativo', r.pendingBefore.length === 3 && r.pendingBefore.every((x) => x === 'pending') && r.probeEnabled === true, { states: r.pendingBefore, enabled: r.probeEnabled });
     check(scn, 'a validação fez UMA consulta, a do 1º pendente (val_a)', r.probeReqs === 1 && profileReqs(log)[0].username === 'val_a', { reqs: r.probeReqs, first: profileReqs(log)[0] && profileReqs(log)[0].username });
-    check(scn, 'quadro: endpoint, HTTP 200, public_email, caminho e decisão do parser', /@val_a/.test(r.card) && /GET \/api\/v1\/users\/\{id\}\/info\//.test(r.card) && /HTTP 200 · Retry-After: não se aplica/.test(r.card) && /public_email: texto/.test(r.card) && /Caminho do campo: user\.public_email/.test(r.card) && /Decisão do parser: email_found \(public_email\) — E-mail comercial encontrado/.test(r.card) && /Horário:/.test(r.card), r.card.slice(0, 600));
+    check(scn, 'quadro: endpoint, HTTP 200, public_email, caminho e decisão do parser', /@val_a/.test(r.card) && /GET https:\/\/www\.instagram\.com\/api\/v1\/users\/\{id\}\/info\/ \(enviado de fato\)/.test(r.card) && /HTTP 200 · Retry-After: não se aplica/.test(r.card) && /public_email: texto/.test(r.card) && /Caminho do campo: user\.public_email/.test(r.card) && /Decisão do parser \(e-mail\): email_found \(public_email\) — E-mail comercial encontrado/.test(r.card) && /Horário:/.test(r.card), r.card.slice(0, 600));
     check(scn, 'quadro: e-mail só mascarado, sem cookie, token ou cabeçalho', /E-mail \(mascarado\): v\*\*\*@loja\.com\.br/.test(r.card) && !/valida@loja|cookie|csrf|token|x-ig/i.test(r.card), r.card.slice(0, 300));
+    check(scn, 'o quadro fica dentro do painel (não é sobreposição) e tem botão de fechar', r.board && r.board.inNotices === false && r.board.position !== 'fixed' && r.board.hasClose === true, r.board);
+    check(scn, 'com o quadro aberto nenhum botão fica coberto (Continue, exportações, Copiar diagnóstico...)', r.covered.length === 0, r.covered);
     check(scn, 'a linha validada só é preenchida quando a fila chega nela', r.rowAfterProbe && r.rowAfterProbe.state === 'pending' && !r.rowAfterProbe.detailLoaded);
     check(scn, 'depois de Continue: 3 consultas no total (o validado não foi repetido)', profileReqs(log).length === 3 && profileReqs(log).filter((e) => e.username === 'val_a').length === 1, profileReqs(log).map((e) => e.username));
     check(scn, 'e-mail do val_a na tabela; os outros sem e-mail público; fila concluída', byUser.val_a.email === 'valida@loja.com.br' && byUser.val_a.state === 'email_found' && byUser.val_b.state === 'no_public_email' && byUser.val_c.state === 'no_public_email' && s.isComplete === true, s.rows.map((x) => [x.user, x.state, x.email]));

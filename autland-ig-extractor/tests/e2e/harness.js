@@ -29,6 +29,9 @@ function parseResult(name, state, params, scenario) {
     case 'getConfigs':
       return {
         status: 'ok', objectId: 'cfgTest', trialCount: 1000, ClaimSessionStorageKey: 'claimTest',
+        // What the vendor's server config carries for the popup's "am I logged in to Instagram" check.
+        InsUserStatusFromCookie: { url: 'https://www.instagram.com/', cookieKey: 'ds_user_id' },
+        InsUserStatusFromHtml: { url: 'https://www.instagram.com/', reg: '%22viewerId%22%3A%22(%5C\\d%2B)%22' },
         apiUserForComment: {
           url: COMMENTS_URL,
           noExistCheckKey: 'data.status', noExistCheckValue: 'ok',
@@ -58,6 +61,9 @@ function parseResult(name, state, params, scenario) {
       };
     case 'u': return { isPro: true };
     case 'getUseCount': return 0;
+    case 'getHistorys':
+      // The popup's history list, as the server would return it (the test sets scenario.historyList).
+      return { list: (scenario && scenario.historyList) || [], total: ((scenario && scenario.historyList) || []).length };
     case 'getHistoryItem':
       // Resume test: hand back the history as the server stored it from the last updates.
       if (scenario && scenario.resumeHistory && state.lastHistory) {
@@ -122,7 +128,9 @@ async function launch(extDir, label, options) {
 
 /* scenario: { comments: [{pk, username}], profiles: {username: (n, req) => response}, ... } */
 async function install(ctx, scenario, log) {
-  const state = { historyUpdates: 0, profileCalls: {} };
+  // A scenario that spans several browser launches carries the server-side history over (scenario.carry).
+  const carry = (scenario && scenario.carry) || {};
+  const state = { historyUpdates: carry.historyUpdates || 0, profileCalls: {}, lastHistory: carry.lastHistory, customUserList: carry.customUserList };
   await ctx.route('**/*', async (route) => {
     const req = route.request(), url = req.url(), t = Date.now();
     if (url.startsWith('chrome-extension://') || url.startsWith('data:') || url.startsWith('chrome://')) return route.continue();
@@ -165,10 +173,11 @@ async function install(ctx, scenario, log) {
         credentials: { csrfHeader: !!all['x-csrftoken'], withClaimHeader: 'x-ig-www-claim' in all } });
       const fixture = username && scenario.profiles[username];
       const res = fixture ? fixture(n, req) : { status: 404, body: { message: 'User not found', status: 'fail' } };
+      if (res.abort) return route.abort('connectionreset');
       const body = typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
       return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': res.contentType || 'application/json' }, res.headers || {}), body });
     }
-    if (u.host === 'www.instagram.com' && u.pathname === '/api/v1/users/web_profile_info/' && scenario.comments) {
+    if (u.host === 'www.instagram.com' && u.pathname === '/api/v1/users/web_profile_info/' && scenario.comments && !scenario.legacyWeb) {
       // Comment mode never asks the web route: any request here is a defect.
       log.push({ t, kind: 'FORBIDDEN_web_profile_info', url });
       return route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
@@ -180,6 +189,7 @@ async function install(ctx, scenario, log) {
       log.push({ t, kind: 'profile', username, n, headers: { 'x-ig-app-id': headers['x-ig-app-id'], 'user-agent': headers['user-agent'] ? 'present' : 'absent' } });
       const fixture = scenario.profiles[username];
       const res = fixture ? fixture(n, req) : { status: 500, body: { status: 'fail', message: 'no fixture' } };
+      if (res.abort) return route.abort('connectionreset');
       const body = typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
       return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': res.contentType || 'application/json' }, res.headers || {}), body });
     }
@@ -193,6 +203,7 @@ async function install(ctx, scenario, log) {
       const n = (state.profileCalls['info:' + pk] = (state.profileCalls['info:' + pk] || 0) + 1);
       log.push({ t, kind: 'info', pk, n, headers: req.headers() });
       const res = scenario.info[pk] ? scenario.info[pk](n, req) : { status: 404, body: { status: 'fail', message: 'User not found' } };
+      if (res.abort) return route.abort('connectionreset');
       const body = typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
       return route.fulfill({ status: res.status || 200, headers: Object.assign({ 'content-type': 'application/json' }, res.headers || {}), body });
     }
@@ -281,4 +292,27 @@ async function exportXlsxSheets(page, which) {
   return JSON.parse(out);
 }
 
-module.exports = { exportXlsxSheets, launch, install, snapshot, exportCsv, clickButton, waitFor, findVmSource, PIXEL };
+/* Controls on screen whose centre point is covered by something else (an overlay sitting on a button). A control
+ * off the screen is not listed (it is reachable by scrolling); the DJ bar and a toast (a few seconds) are not counted. */
+async function coveredControls(page) {
+  return page.evaluate(() => {
+    const out = [];
+    for (const el of document.querySelectorAll('button, a[href], input, select, textarea, [role=button]')) {
+      const b = el.getBoundingClientRect();
+      if (!b.width || !b.height) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+      const x = b.x + b.width / 2, y = b.y + b.height / 2;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      const top = document.elementFromPoint(x, y);
+      if (!top || top === el || el.contains(top) || top.contains(el)) continue;
+      if (top.closest && (top.closest('#dj-filter-bar') || top.closest('.toast'))) continue;   // a toast lasts a few seconds (the extension's own and the vendor's)
+      const box = (top.closest && top.closest('.notification, .modal, .notices > *')) || top, r = box.getBoundingClientRect();
+      out.push({ control: (el.innerText || el.value || el.id || el.tagName).toString().trim().slice(0, 40), at: [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)],
+        coveredBy: String(box.className || box.tagName).slice(0, 80), cover: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], coverText: (box.innerText || '').trim().slice(0, 60) });
+    }
+    return out;
+  });
+}
+
+module.exports = { exportXlsxSheets, launch, install, snapshot, exportCsv, clickButton, waitFor, findVmSource, coveredControls, PIXEL };

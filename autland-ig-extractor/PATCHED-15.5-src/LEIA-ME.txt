@@ -1,0 +1,102 @@
+Autland IG Extractor — PATCHED 15.5 — E-mail e telefone públicos via /users/{id}/info/
+
+SITUAÇÃO (leia antes de instalar)
+- PENDENTE DE VALIDAÇÃO REAL. Esta versão NÃO foi testada contra uma resposta real do
+  Instagram. O ambiente onde ela foi feita não acessa o instagram.com nem a sua sessão.
+  Todos os testes usam respostas simuladas (as formas vêm de capturas públicas reais,
+  anonimizadas). Não há prova de que o Instagram entrega e-mail ou telefone públicos para
+  a sua conta por esta rota hoje. Esta versão não afirma que a coleta funciona.
+- Os seus 3 testes reais (versões 15, 15.1 e 15.2) receberam HTTP 429 na 1ª consulta de
+  perfil. A 15.5 não promete vencer o 429: ela respeita o limite e evita consultas
+  desnecessárias.
+- RELATORIO-15.5.md (no repositório) diz o que passou em teste simulado, o que falhou, o que
+  continua sem validação e o mínimo necessário para validar.
+
+O QUE MUDOU NA 15.5 (em relação à 15.4)
+1. O telefone entra no registro de validação. O quadro da 1ª resposta real, o botão
+   "Validar 1 perfil pendente" e "Copiar diagnóstico" mostram, para o e-mail E para o
+   telefone: a decisão do parser, de qual campo veio (campo público do Instagram ou texto da
+   bio/link), o estado de cada campo de telefone (texto, vazio, null, ausente) e o valor
+   MASCARADO (a***@dominio, +55*********21). Contato completo, cookie e token nunca aparecem.
+2. O registro diz o endereço que foi realmente enviado (host e caminho, id trocado por {id},
+   sem parâmetros), a versão da extensão e o modo. A 15.4 escrevia um texto fixo.
+3. Resumo por categoria no diagnóstico (sem valores): com e-mail público, com telefone público,
+   com telefone só no texto da bio/link, sem contato público, aguardando, indisponíveis, falhas.
+4. Id de perfil acima de 2^53 deixa de ser tratado como "perfil divergente": o número que o
+   JSON arredonda cede ao id exato em texto (pk_id/id) da mesma resposta, e a linha guarda o id
+   exato que foi pedido. A lista de comentários faz o mesmo: id numérico acima de 2^53 é trocado
+   pelo id em texto do comentarista, quando a lista traz um. Sem id em texto, só resta o número
+   arredondado e a comparação fica no limite da precisão dele.
+5. No Comment, a resposta é lida no layout que o próprio leitor monta, e não com a lista de
+   chaves que vem da configuração do servidor do fornecedor (que poderia mudar). Os outros
+   modos continuam lendo com as chaves do servidor, como sempre.
+6. Exportações do dashboard depois de retomar: "export all / email / phone" trazem tudo que a
+   tarefa acumulou (as linhas salvas das sessões anteriores do mesmo histórico + as desta
+   sessão), uma linha por perfil. Na 15.4 saíam só as linhas coletadas depois da retomada
+   (no teste de ponta a ponta, 4 de 6). A tabela continua mostrando as linhas desta sessão
+   ("The task has accumulated N users" é o texto do fornecedor); o histórico do popup já era
+   completo.
+7. Linha salva sem o campo de telefone exporta célula vazia (antes poderia sair "undefined"),
+   e "export phone" conta exatamente as linhas que vão para o arquivo.
+8. XLSX do Comment, aba "Diagnostico contato": origem e estado de cada campo de telefone.
+9. Campo de telefone com texto que não é telefone ("ligue-nos", "12") aparece como inválido, e
+   não como "vazio ou oculto". A máscara mostra "+", 2 dígitos do prefixo e os 2 últimos
+   (sem "+": só os 2 últimos); um telefone válido tem 8 dígitos ou mais, então no máximo metade
+   aparece.
+10. O endereço realmente enviado fica num campo próprio. O que a 15.4 gravou era uma rota
+   presumida e nunca é mostrado como "enviado".
+11. O quadro "Validação de 1 consulta" agora fica DENTRO do painel, logo abaixo de "Validar 1
+   perfil pendente" / "Copiar diagnóstico", com botão × para fechar. Na 15.4 era um aviso
+   flutuante no canto inferior direito (600 x 520 px numa janela de 1280 x 720) que cobria
+   Continue, as exportações e "Copiar diagnóstico" até ser fechado. O título diz de onde veio:
+   "1ª resposta real desta execução" ou "validação manual". Continue fecha o quadro (como
+   fecha os demais avisos); a 1ª resposta da execução retomada abre o seguinte. Um aviso curto
+   ("Primeira resposta de perfil recebida...") lembra de olhar o quadro no topo da página.
+
+CONTINUA IGUAL À 15.4
+- Comment: comentário -> user_id -> GET /api/v1/users/{id}/info/ (a mesma função, os mesmos
+  cabeçalhos da sua sessão e as mesmas credenciais dos outros modos). Uma consulta por perfil.
+- E-mail só do campo público do Instagram (public_email; business_email só se vier preenchido).
+  Nunca bio, legenda, comentário, site, login ou recuperação.
+- HTTP 429: pausa imediata, Retry-After respeitado, 60 minutos quando não vem, pausa salva e
+  compartilhada entre abas, nenhuma consulta durante a pausa, nenhuma repetição automática.
+- Fila e cursor persistentes, cache por user_id, deduplicação, ritmo adaptativo (15–30 s, o seu
+  intervalo salvo vale, mínimo 10 s), uma consulta por vez.
+- Falha (429, 403, login, rede, resposta inválida) nunca vira "sem e-mail" e nunca é salva
+  como resultado.
+- Chave do manifesto, ID da extensão, permissões e os outros modos.
+
+LIMITE CONHECIDO DE INTERFACE (herdado, não alterado)
+- O aviso vermelho do HTTP 429 ("Oops! Something went wrong...") continua sendo o aviso
+  flutuante original no canto inferior direito. Em janela pequena (por exemplo 1280 x 720) ele
+  pode ficar sobre Continue ou sobre as exportações. Feche no × do aviso; Continue também fecha
+  os avisos abertos. Nenhuma consulta sai por causa disso: a pausa vale de qualquer jeito.
+
+O TELEFONE, EM CLARO
+- "Public Phone" pode vir do campo público do Instagram (contact_phone_number,
+  public_phone_number, business_phone_number, com o código do país) OU, como desde a versão
+  original, de um telefone escrito na bio ou num link (wa.me, tel:). A origem aparece no
+  diagnóstico e na aba "Diagnostico contato". Se você quiser só o campo público, é uma decisão
+  sua; hoje a coluna mistura as duas origens.
+- O popup (histórico) exporta "all" e "email". A exportação "phone" existe só no dashboard.
+
+ATUALIZAÇÃO (sem remover a extensão e sem apagar o armazenamento)
+1. Feche os dashboards abertos e extraia o ZIP inteiro.
+2. Copie TODOS os arquivos para a pasta da extensão já instalada, substituindo os
+   correspondentes.
+3. Em chrome://extensions, clique em Recarregar na Autland IG Extractor. Não remova a
+   extensão: isso apagaria o histórico, a fila e a pausa salva.
+4. Abra o modo Comment. O cabeçalho deve mostrar
+   "PATCHED 15.5 · E-mail comercial via /users/{id}/info/".
+5. Se houver pausa de 429 salva, aguarde o horário mostrado na tela.
+
+VALIDAÇÃO REAL (o que falta)
+1. No modo Comment, escolha um post que tenha comentaristas conhecidos: um com e-mail público,
+   um com telefone público e um sem contato público (perfil -> Contato, no app).
+2. Clique em Iniciar. A 1ª resposta real abre o quadro "Validação de 1 consulta" no painel,
+   abaixo dos botões (se a janela estiver rolada para baixo, suba até o topo da página).
+3. Clique em "Copiar diagnóstico" e guarde o texto: ele é o registro da validação.
+   - e-mail: "email_found (public_email)" e o e-mail mascarado bate com o app;
+   - telefone: "phone_found (<campo>, campo público do Instagram)" e os 2 últimos dígitos batem;
+   - sem contato: HTTP 200, "no_public_email" e "sem telefone público";
+   - HTTP 429: a pausa é respeitada e nada mais sai até o horário.

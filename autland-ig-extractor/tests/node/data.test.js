@@ -77,6 +77,9 @@ function commentSetup(vm) {
 }
 function commentVm(env, id, query) {
   const vm = env.instance(query || { type: '4', ins: 'POST' });
+  // The validation board is panel state (validationCard); each board shown is recorded here, the last one is what the screen holds.
+  env.cards = env.cards || [];
+  vm.$watch('validationCard', (v) => { if (v) env.cards.push(v); }, { sync: true });
   commentSetup(vm);
   vm.lastHistoryItem = { id, token: 't', updateTimes: 0, scrapedCount: 0, cursorScrapedCount: 0, count: 0 };
   vm.isPaused = false;
@@ -130,12 +133,17 @@ test('Comment 15.4: a 1ª resposta do dia mostra o quadro do parser (rota, HTTP,
   const vm = commentVm(env, 'HK');
   vm.startLoadAllData();
   await env.run(5000, () => vm.isComplete); await env.flush(30);
-  const cards = env.notifications.filter((n) => /Validação de 1 consulta/.test(n.message || ''));
+  const cards = env.cards.filter((n) => /Validação de 1 consulta/.test(n.html || ''));
   assert.equal(cards.length, 1, 'um quadro só, na 1ª resposta real da execução');
-  const card = cards[0].message;
+  assert.equal(vm.validationCard, cards[0], 'o quadro está no painel até ser fechado ou trocado');
+  assert.equal(cards[0].type, 'is-success');
+  assert.ok(!env.notifications.some((n) => /Validação de 1 consulta/.test(n.message || '')), 'o quadro não é mais uma sobreposição (notificação) que cobre botões');
+  assert.ok(env.notifications.some((n) => /Primeira resposta de perfil recebida/.test(n.message || '')), 'um aviso curto aponta para o quadro');
+  const card = cards[0].html;
+  assert.match(card, /1ª resposta real desta execução/);
   assert.match(card, /@user0/); assert.match(card, /GET \/api\/v1\/users\/\{id\}\/info\//); assert.match(card, /HTTP 200 · Retry-After: não se aplica/);
   assert.match(card, /public_email: texto · business_email: ausente/); assert.match(card, /Caminho do campo: user\.public_email/);
-  assert.match(card, /Decisão do parser: email_found \(public_email\) — E-mail comercial encontrado/);
+  assert.match(card, /Decisão do parser \(e-mail\): email_found \(public_email\) — E-mail comercial encontrado/);
   assert.match(card, /E-mail \(mascarado\): p\*\*\*@loja\.com/);
   assert.ok(!/primeiro@loja\.com|cookie|csrf|token/i.test(card));
 });
@@ -151,8 +159,11 @@ test('Comment 15.4: validar 1 perfil pendente faz 1 consulta, mostra o quadro e 
   vm.handleContactProbe(); await env.flush(60);
   assert.equal(env.calls.length - before, 1, 'uma única consulta');
   assert.equal(env.calls[before], '1000', 'o 1º perfil pendente');
-  const card = env.notifications.filter((n) => /Validação de 1 consulta/.test(n.message || '')).pop().message;
-  assert.match(card, /HTTP 200/); assert.match(card, /Decisão do parser: email_found/);
+  const card = env.cards.filter((n) => /Validação de 1 consulta/.test(n.html || '')).pop().html;
+  assert.equal(vm.validationCard.html, card, 'o quadro da validação manual está no painel');
+  assert.match(card, /validação manual/);
+  assert.ok(!env.notifications.some((n) => /Validação de 1 consulta/.test(n.message || '')), 'nenhuma sobreposição');
+  assert.match(card, /HTTP 200/); assert.match(card, /Decisão do parser \(e-mail\): email_found/);
   assert.equal(vm.followList[0].detailLoaded, false, 'a linha só é preenchida quando a fila chega nela');
   vm.manualPause = false; vm.resumeExtraction();
   await env.run(6000, () => vm.isComplete); await env.flush(30);
@@ -169,10 +180,16 @@ test('Comment 15.4: se a validação de 1 perfil recebe 429, nenhuma outra consu
   vm.handleContactProbe(); await env.flush(80);
   assert.equal(env.calls.length, 1);
   assert.ok(env.store.ig_contact_cooldown_until >= env.now() + 590000, 'Retry-After de 600 s salvo');
+  // the board in the panel says what happened: refused, never "sem e-mail"
+  assert.equal(vm.validationCard && vm.validationCard.type, 'is-warning');
+  assert.match(vm.validationCard.html, /HTTP 429 · Retry-After: 600/);
+  assert.ok(!/sem e-mail|não disponibiliza/i.test(vm.validationCard.html), 'um 429 não vira "sem e-mail"');
   vm.handleContactProbe(); vm.manualPause = false; vm.resumeExtraction(); await env.flush(80);
   await env.run(400, () => false); await env.flush(30);
   assert.equal(env.calls.length, 1, 'nem pelo botão, nem pela fila, nem sozinho');
   assert.ok(vm.followList.every((r) => !r.detailLoaded));
+  vm.closeValidationCard();
+  assert.equal(vm.validationCard, null, 'fechar o quadro o remove do painel');
 });
 
 const P_of = () => require(path.join(EXT, 'public-contact-parser.js'));
@@ -314,6 +331,34 @@ test('Comment 15.4: fechar e reabrir continua exatamente do ponto salvo (fila e 
   const stored = env2.store.extract_list_HQ;
   assert.equal(stored.length, 60); assert.equal(new Set(stored.map((r) => r.userId)).size, 60);
   assert.ok(stored.every((r) => r.detailLoaded), 'nenhum fica "Aguardando consulta"');
+});
+test('Comment 15.5: depois de retomar, as exportações do dashboard têm tudo que a tarefa acumulou; a tabela segue mostrando a sessão', async () => {
+  const users = commenters(8);
+  const extra = (u) => ({ public_email: u.username + '@loja.com', contact_phone_number: u.username === 'user1' ? '11911110001' : '', public_phone_country_code: '55' });
+  const env1 = commentEnv(users, { extra, fail: (id, n) => (n === 4 ? http429() : null) });
+  const vm1 = commentVm(env1, 'HX');
+  vm1.startLoadAllData();
+  await env1.run(5000, () => vm1.isPaused); await env1.flush(50);
+  assert.equal(env1.calls.length, 4, '3 respondidas + o 429');
+  // sem retomada nenhuma: as exportações são as linhas da sessão
+  assert.equal(vm1.exportAllList.length, vm1.userList.length); assert.equal(vm1.exportEmailList.length, vm1.emailList.length);
+  const { env2, vm2 } = await reopen(env1, users, 'HX', { extra });
+  await env2.run(9000, () => vm2.isComplete); await env2.flush(50);
+  assert.equal(vm2.isComplete, true);
+  assert.equal(vm2.userList.length, 5, 'a tabela mostra só o que esta sessão consultou (as 3 de antes ficaram guardadas)');
+  assert.equal(vm2.exportAllList.length, 8, 'export all: as 8 linhas da tarefa');
+  assert.deepEqual(plain(vm2.exportAllList.map((r) => r.userName)).sort(), users.map((u) => u.username).sort());
+  assert.equal(vm2.exportEmailList.length, 8); assert.ok(vm2.exportEmailList.every((r) => r.email === r.userName + '@loja.com'));
+  assert.deepEqual(plain(vm2.exportPhoneList.map((r) => [r.userName, r.phone])), [['user1', '+5511911110001']], 'export phone: o telefone da sessão ANTERIOR também entra');
+  assert.ok(vm2.exportAllList.every((r) => r.detailLoaded && typeof r.phone === 'string'));
+  // o arquivo: 8 linhas, nome com o total
+  const { modules } = loadChunks(EXT);
+  const req = makeRequire(modules), jsonAsXlsx = req('5e85'), XLSX = req('5169');
+  env2.exports.length = 0;
+  vm2.handleDownload('all', vm2.exportAllList, 'xlsx');
+  const wb = XLSX.read(jsonAsXlsx(env2.exports[0].sheets, { fileName: 'x', writeOptions: { type: 'buffer' } }), { type: 'binary' });
+  assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.all, { header: 1 }).length, 9, 'cabeçalho + 8 linhas');
+  assert.match(env2.exports[0].name, /^IGEmailExtractor-all-8-\d{14}$/);
 });
 test('Comment 15.4: lista interrompida no meio continua da página salva, sem reler as anteriores e sem perder comentaristas', async () => {
   const users = commenters(160);
@@ -634,6 +679,95 @@ test('Índice do histórico com 2 dashboards abertos: nenhum apaga a data mais n
   await B.saveExtractRows(); await env.flush();
   const index = Object.fromEntries(env.store.localStorageExtractKeys.map((k) => [k.key, Math.round((now - k.date) / day)]));
   assert.deepEqual(index, { extract_list_OLD: 0, extract_list_NEWB: 0 });
+});
+
+test('Comment 15.5: a resposta é lida no layout fixo do leitor; só os outros modos usam as chaves do servidor', async () => {
+  // O Comment remonta a resposta em data.status + data.user.*; uma lista de chaves que o servidor do fornecedor
+  // mudasse (check, ordem, caminhos) não pode transformar respostas boas em "falha" nem embaralhar as colunas.
+  const users = commenters(3);
+  const extra = (u) => ({ public_email: 'p' + u.username + '@loja.com', contact_phone_number: '11911110000', public_phone_country_code: '55', biography: 'bio ' + u.username, follower_count: 4321, city_name: 'Campinas' });
+  const view = (vm) => plain(vm.followList.map((r) => ({ user: r.userName, name: r.fullName, followers: r.followers, following: r.following, posts: r.post, email: r.email, phone: r.phone, bio: r.bio, city: r.city, address: r.address, biz: r.isBusiness, ext: r.externalUrl, loaded: r.detailLoaded })));
+  const run = async (cfg) => {
+    const env = commentEnv(users, { extra });
+    const vm = commentVm(env, 'HD' + (cfg ? 'X' : 'O'));
+    if (cfg) vm.configs.ApiUserInfoDetail = cfg;
+    vm.startLoadAllData();
+    await env.run(3000, () => vm.isComplete); await env.flush(30);
+    assert.equal(vm.isComplete, true);
+    return view(vm);
+  };
+  const base = await run(null);
+  assert.ok(base.every((r) => r.loaded && r.email && r.phone === '+5511911110000' && r.followers === 4321 && r.city === 'Campinas'), 'a linha de referência tem tudo preenchido');
+  const drifted = Object.assign({}, detailCfg, { checkKey: 'data.status_novo', checkValue: 'sim',
+    dataKeys: 'data.user.biography|data.user.external_url|data.user.username|data.user.full_name|data.user.public_email|data.user.follower_count|data.user.city_name|data.user.media_count' });
+  assert.deepEqual(await run(drifted), base, 'com as chaves do servidor trocadas, o Comment grava exatamente as mesmas linhas');
+});
+test('detailConfig 15.5: só o Comment tem layout fixo; os outros modos recebem a configuração do servidor tal como veio', () => {
+  const env = createEnv(EXT, { quiet: true });
+  const vm = env.instance({});
+  vm.configs = { ApiUserInfoDetail: detailCfg };
+  for (const type of [0, 1, 2, 3, 5, 6]) { vm.type = type; assert.equal(vm.detailConfig(), detailCfg, 'modo ' + type); }
+  vm.type = 4;
+  const fixed = vm.detailConfig();
+  assert.notEqual(fixed, detailCfg); assert.equal(fixed.checkKey, 'data.status'); assert.equal(fixed.checkValue, 'ok');
+  assert.ok(fixed.dataKeys.split('|').length === 17 && fixed.dataKeys.startsWith('data.user.profile_pic_url|data.user.username|data.user.full_name'));
+});
+
+test('Comment 15.5: a aba de diagnóstico rotula a origem do telefone pela origem, também em linhas salvas por versões antigas', async () => {
+  const { modules } = loadChunks(EXT);
+  const req = makeRequire(modules), jsonAsXlsx = req('5e85'), XLSX = req('5169');
+  const env = createEnv(EXT, { quiet: true });
+  const vm = env.instance({}); vm.type = 4;
+  const base = { loaded: true, detailLoaded: true, email: '', emailStatus: 'empty', contactParserVersion: 15, contactRoute: 'users_info' };
+  vm.followList = [
+    Object.assign({ id: 1, userId: '1', userName: 'campo', phone: '+5511911110001', phoneSource: 'contact_phone_number' }, base), // salva pela 15.4: sem phonePublished
+    Object.assign({ id: 2, userId: '2', userName: 'bio', phone: '11988887777', phoneSource: 'biography' }, base),
+    Object.assign({ id: 3, userId: '3', userName: 'link', phone: '+5511977776666', phoneSource: 'profile_link' }, base),
+    Object.assign({ id: 4, userId: '4', userName: 'nenhum', phone: '' }, base),
+  ];
+  env.exports.length = 0;
+  vm.handleDownload('all', vm.exportAllList, 'xlsx');
+  const wb = XLSX.read(jsonAsXlsx(env.exports[0].sheets, { fileName: 'x', writeOptions: { type: 'buffer' } }), { type: 'binary' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets['Diagnostico contato']);
+  assert.deepEqual(plain(rows.map((r) => [r.Perfil, r['Origem do telefone']])), [['@campo', 'contact_phone_number (campo público)'], ['@bio', 'biography (texto da bio/link)'], ['@link', 'profile_link (texto da bio/link)'], ['@nenhum', '-']]);
+  assert.deepEqual(plain(vm.contactRunSummary.phonePublished), ['@campo']); assert.deepEqual(plain(vm.contactRunSummary.phoneText), ['@bio', '@link']);
+});
+test('Comment 15.5: id numérico da lista acima de 2^53 (já arredondado) é trocado pelo id exato em texto do mesmo comentarista', async () => {
+  // JSON.parse arredondou o pk (73987654321098765 -> 73987654321098770); o pedido iria para outro perfil.
+  const users = [{ pk: 73987654321098765, pk_id: '73987654321098765', username: 'grande1', profile_pic_url: 'p' }, { pk: 1001, username: 'normal', profile_pic_url: 'p' },
+    { pk: 73987654321098999, username: 'sem_texto', profile_pic_url: 'p' }];
+  const env = commentEnv(users, { extra: () => ({ public_email: 'x@loja.com' }) });
+  const vm = commentVm(env, 'HB');
+  vm.startLoadAllData();
+  await env.run(3000, () => vm.isComplete); await env.flush(30);
+  assert.equal(vm.isComplete, true);
+  assert.equal(env.calls[0], '73987654321098765', 'o pedido usa o id exato em texto, não o número arredondado');
+  assert.equal(env.calls[1], '1001', 'id comum: nada muda');
+  assert.equal(env.calls[2], String(users[2].pk), 'sem id em texto na resposta da lista, segue como sempre (não há nada melhor)');
+  assert.equal(vm.followList[0].userId, '73987654321098765');
+});
+test('Comment 15.5: entrada de diagnóstico salva pela 15.4 (rota presumida) não é mostrada como "enviada"; as da 15.5 são', async () => {
+  const env = createEnv(EXT, { quiet: true });
+  const vm = env.instance({}); vm.type = 4; vm.version = 'v2.5.1 · PATCHED 15.5';
+  const old154 = { at: Date.UTC(2026, 9, 5, 12), endpoint: 'instagram_users_info', route: 'GET /api/v1/users/{id}/info/', username: 'antigo', http: 200, outcome: 'found', state: 'email_found', email: 'a***@x.com' };
+  vm.contactEvidence = [old154];
+  assert.match(vm.contactDiagnosticText, /rota padrão; as respostas registradas não guardam o endereço enviado/);
+  assert.ok(!/rota enviada de fato|rota=/.test(vm.contactDiagnosticText), 'a rota presumida da 15.4 não vira "enviada"');
+  assert.match(vm.contactCardText(old154, 'x'), /Endpoint: GET \/api\/v1\/users\/\{id\}\/info\/ \(rota padrão; a requisição não informou o endereço enviado\)/);
+  const fresh = Object.assign({}, old154, { username: 'novo', sentRoute: 'GET https://www.instagram.com/api/v1/users/{id}/info/' });
+  vm.contactEvidence = [fresh, old154];
+  assert.match(vm.contactDiagnosticText, /Consulta: GET https:\/\/www\.instagram\.com\/api\/v1\/users\/\{id\}\/info\/ \(rota enviada de fato\)/);
+  assert.match(vm.contactCardText(fresh, 'x'), /\(enviado de fato\)/);
+});
+test('Comment 15.5: o quadro explica o campo de telefone com texto inválido, sem chamá-lo de vazio ou oculto', async () => {
+  const env = createEnv(EXT, { quiet: true });
+  const vm = env.instance({}); vm.type = 4; vm.version = 'v2.5.1 · PATCHED 15.5';
+  const entry = { at: Date.UTC(2026, 9, 5, 12), username: 'tel_ruim', http: 200, keys: { public_email: 'empty', business_email: 'absent' }, emailField: 'user.public_email', decision: 'no_public_email (empty)', outcome: 'empty',
+    phoneKeys: { contact_phone_number: 'invalid', public_phone_number: 'absent', business_phone_number: 'absent', public_phone_country_code: 'present' }, phoneStatus: 'invalid', phone: '', phoneField: '' };
+  const card = vm.contactCardText(entry, 'x');
+  assert.match(card, /contact_phone_number: formato inválido/);
+  assert.match(card, /Decisão do parser \(telefone\): sem telefone público — há campo de telefone com texto que não é um telefone válido/);
+  assert.ok(!/vazios ou ocultos/.test(card));
 });
 
 test('Exportações: mesmas colunas em todos os modos; abas de diagnóstico só no Comment', async () => {

@@ -152,7 +152,7 @@ test('parser: só os envelopes comprovados (user, data.user, items[0].user) e a 
   const other = P.locateProfile({ data: { user: u } }, '78', '');
   assert.equal(other.mismatch, true); assert.equal(P.profileFromResponse({ data: { user: u } }, '78', ''), null);
   // user nulo = perfil ausente; formatos que a extensão não recebe = desconhecido
-  assert.deepEqual(P.locateProfile({ data: { user: null } }, '77', ''), { known: true, path: 'data.user', user: null, mismatch: false });
+  assert.deepEqual(P.locateProfile({ data: { user: null } }, '77', ''), { known: true, path: 'data.user', user: null, mismatch: false, id: '' });
   for (const bad of [{ data: { viewer: { user: u } } }, { data: { graphql: { user: u } } }, { data: { users: [u] } }, { data: { suggested: [{ user: u }] } }, { data: 'html' }, {}]) {
     assert.equal(P.locateProfile(bad, '77', '').known, false, JSON.stringify(bad).slice(0, 40));
     assert.equal(P.profileFromResponse(bad, '77', ''), null);
@@ -208,7 +208,7 @@ function deps(responses, opts = {}) {
           const next = responses.shift();
           if (!next) throw new Error('no response scripted');
           if (next.throw) throw next.throw;
-          return { status: next.status || 200, headers: next.headers || {}, data: next.body };
+          return { status: next.status || 200, headers: next.headers || {}, data: next.body, url: next.url };
         } finally { active--; }
       },
       now: () => clock,
@@ -242,7 +242,7 @@ test('leitor: HTTP 200 com public_email preenchido (resposta real anonimizada) =
   assert.equal(r.publicContactResult.emailSource, 'public_email'); assert.equal(r.contactRoute, 'users_info');
   assert.equal(x.calls.length, 1); assert.equal(x.calls[0].userId, '1000000001');
   const ev = x.store[K.evidenceKey][0];
-  assert.equal(ev.http, 200); assert.equal(ev.endpoint, 'instagram_users_info'); assert.equal(ev.route, 'GET /api/v1/users/{id}/info/');
+  assert.equal(ev.http, 200); assert.equal(ev.endpoint, 'instagram_users_info'); assert.equal(ev.sentRoute, undefined, 'sem endereço informado pela requisição, nenhuma rota é presumida'); assert.ok(!('route' in ev), 'o campo "route" presumido da 15.4 não existe mais');
   assert.equal(ev.state, 'email_found'); assert.equal(ev.decision, 'email_found (public_email)'); assert.equal(ev.emailField, 'user.public_email');
   assert.equal(ev.path, 'user'); assert.equal(ev.email, 'c***@exemplo.com.br');
   // a resposta real desta rota traz public_email e não traz business_email
@@ -546,4 +546,143 @@ test('pausa: falha passageira do armazenamento é repetida 1 vez; falha persiste
   assert.equal(flaky.data.ig_contact_cooldown_until, 1234);
   const broken = { get: async () => { throw new Error('Extension context invalidated'); }, set: async () => {} };
   await assert.rejects(R.saveCooldown(broken, realLock(), 1234, async () => {}));
+});
+
+/* ---------- PATCHED 15.5: ids above 2^53, phone decision, request route ---------- */
+test('parser 15.5: a identidade do perfil resiste a ids acima de 2^53 (pk numérico arredondado pelo JSON.parse)', () => {
+  const body = JSON.parse('{"user":{"pk":73987654321098765,"pk_id":"73987654321098765","id":"73987654321098765","username":"x","public_email":"a@b.com","account_type":2}}');
+  assert.notEqual(String(body.user.pk), '73987654321098765', 'a premissa: o pk numérico já vem arredondado');
+  const ok1 = P.locateProfile({ data: body }, '73987654321098765', '');
+  assert.equal(ok1.mismatch, false); assert.equal(ok1.id, '73987654321098765', 'o id exato vem do texto (pk_id)');
+  // só o pk numérico: compara como número (o id esperado arredondaria para o mesmo valor)
+  const onlyNum = JSON.parse('{"user":{"pk":73987654321098765,"username":"x"}}');
+  assert.equal(P.locateProfile({ data: onlyNum }, '73987654321098765', '').mismatch, false);
+  assert.equal(P.locateProfile({ data: onlyNum }, '73987654321090000', '').mismatch, true, 'outro perfil continua divergente');
+  // ids comuns: comparação exata, sem tolerância
+  const small = { user: { pk: 12345678901, pk_id: '12345678901', username: 'y' } };
+  assert.equal(P.locateProfile({ data: small }, '12345678901', '').mismatch, false);
+  assert.equal(P.locateProfile({ data: small }, '12345678902', '').mismatch, true);
+  // a resposta de outro perfil nunca passa, mesmo com id grande
+  assert.equal(P.locateProfile({ data: body }, '73987654321098764', '').mismatch, true);
+  // sem nenhum campo de id: nada a comparar aqui (o leitor recusa essa resposta à parte)
+  const none = P.locateProfile({ data: { user: { username: 'z' } } }, '5', '');
+  assert.equal(none.mismatch, false); assert.equal(none.id, '');
+});
+test('parser 15.5: máscara do telefone mostra só o prefixo e os 2 últimos dígitos; texto livre não vira telefone', () => {
+  assert.equal(P.maskPhone('+5511987654321'), '+55*********21');
+  assert.equal(P.maskPhone('(11) 98765-4321'), '*********21', 'sem "+": só os 2 últimos dígitos');
+  assert.equal(P.maskPhone('3456-7890'), '******90'); assert.equal(P.maskPhone('+12345678'), '+12****78');
+  assert.equal(P.maskPhone('12345'), '', 'curto demais para ser telefone: não há o que mascarar');
+  assert.equal(P.maskPhone(''), ''); assert.equal(P.maskPhone(null), ''); assert.equal(P.maskPhone('abc'), '');
+  for (const v of ['+5511987654321', '11987654321']) {
+    const m = P.maskPhone(v);
+    assert.ok(!m.includes(P.validPhone(v)) && m.replace(/\D/g, '').length <= 4, v + ' não aparece inteiro (no máx. 4 dígitos visíveis): ' + m);
+  }
+  // todo telefone válido tem 8 dígitos ou mais: no máximo metade aparece
+  for (const v of ['12345678', '3456-7890', '+12345678', '+5511987654321', '11987654321', '0012125551234']) {
+    const m = P.maskPhone(v), shown = m.replace(/\D/g, '').length, total = P.validPhone(v).replace(/\D/g, '').length;
+    assert.ok(shown * 2 <= total, v + ' mostra ' + shown + ' de ' + total + ': ' + m);
+  }
+});
+test('parser 15.5: telefone público (campo do Instagram) × telefone lido da bio/link, com o estado de cada campo', () => {
+  const field = P.extract({ account_type: 2, should_show_public_contacts: true, public_email: 'a@loja.com', contact_phone_number: '11987654321', public_phone_country_code: '55', public_phone_number: '' });
+  assert.equal(field.phone, '+5511987654321'); assert.equal(field.phoneSource, 'contact_phone_number'); assert.equal(field.phonePublished, true);
+  assert.deepEqual(field.phoneKeys, { contact_phone_number: 'present', public_phone_number: 'empty', business_phone_number: 'absent', public_phone_country_code: 'present' });
+  const bio = P.extract({ account_type: 2, should_show_public_contacts: true, public_email: '', contact_phone_number: '', biography: 'WhatsApp: (11) 98765-4321' });
+  assert.equal(bio.phone, '11987654321'); assert.equal(bio.phoneSource, 'biography'); assert.equal(bio.phonePublished, false, 'o telefone da bio não é o contato público');
+  assert.equal(bio.phoneKeys.contact_phone_number, 'empty');
+  const link = P.extract({ account_type: 2, external_url: 'https://wa.me/5511987654321' });
+  assert.equal(link.phoneSource, 'profile_link'); assert.equal(link.phonePublished, false);
+  const hidden = P.extract({ account_type: 2, should_show_public_contacts: false, contact_phone_number: '11987654321', public_phone_country_code: '55' });
+  assert.equal(hidden.phone, '', 'contato oculto pelo perfil: o campo público não é lido'); assert.equal(hidden.phonePublished, false); assert.equal(hidden.phoneStatus, 'not_published');
+  const none = P.extract({ account_type: 2, should_show_public_contacts: true, public_email: '' });
+  assert.equal(none.phone, ''); assert.equal(none.phoneStatus, 'not_returned'); assert.equal(none.phoneKeys.contact_phone_number, 'absent');
+});
+test('parser 15.5: linha salva sem a chave do telefone exporta célula vazia, nunca "undefined"', () => {
+  assert.equal(P.commercialRow({ userName: 'a' }).phone, '');
+  assert.equal(P.commercialRow({ userName: 'a', phone: null }).phone, '');
+  assert.equal(P.commercialRow({ userName: 'a', phone: '+5511987654321' }).phone, '+5511987654321');
+  assert.equal(P.commercialRow({ userName: 'a', phone: 5511987654321 }).phone, '5511987654321');
+});
+test('leitor 15.5: o telefone entra no registro (campo, estado de cada campo, número mascarado) e nada completo vaza', async () => {
+  const body = fixture('info-creator.json');
+  const x = deps([{ status: 200, body, url: 'https://www.instagram.com/api/v1/users/1000000001/info/?foo=bar' }]);
+  const r = await R.create(x.d)('1000000001', 'perfil_exemplo', null);
+  assert.equal(r.contactOutcome, 'found');
+  assert.equal(r.publicContactResult.phone, '+8411900000000'); assert.equal(r.publicContactResult.phoneSource, 'contact_phone_number');
+  const ev = x.store[K.evidenceKey][0];
+  assert.equal(ev.sentRoute, 'GET https://www.instagram.com/api/v1/users/{id}/info/', 'a rota enviada de fato, sem id e sem query');
+  assert.equal(ev.phone, '+84*********00'); assert.equal(ev.phoneField, 'contact_phone_number'); assert.equal(ev.phonePublished, true); assert.equal(ev.phoneStatus, 'found');
+  assert.deepEqual(ev.phoneKeys, { contact_phone_number: 'present', public_phone_number: 'present', business_phone_number: 'absent', public_phone_country_code: 'present' });
+  const logged = JSON.stringify([x.store[K.evidenceKey], x.store[K.schemaKey]]);
+  assert.ok(!logged.includes('11900000000') && !logged.includes('contato@exemplo.com.br') && !/csrf|cookie|sessionid|authorization/i.test(logged), 'nenhum contato completo, cookie ou token no registro técnico');
+  const schema = K.readSchema(x.store[K.schemaKey]);
+  assert.equal(schema.phoneFound, 1); assert.deepEqual(schema.phoneFoundUsers, ['perfil_exemplo']);
+  assert.deepEqual(schema.firstPhone, { at: schema.firstPhone.at, username: 'perfil_exemplo', phone: '+84*********00', field: 'contact_phone_number', probe: false });
+});
+test('leitor 15.5: telefone lido da bio não vira "telefone público" no registro nem na prova', async () => {
+  const x = deps([ok(person('7', { public_email: '', biography: 'Fale conosco no WhatsApp: (11) 98765-4321' }))]);
+  const r = await R.create(x.d)('7', 'u7', null);
+  assert.equal(r.publicContactResult.phoneSource, 'biography');
+  const ev = x.store[K.evidenceKey][0];
+  assert.equal(ev.phoneField, 'biography'); assert.equal(ev.phonePublished, false);
+  const schema = K.readSchema(x.store[K.schemaKey]);
+  assert.equal(schema.phoneFound, 0); assert.equal(schema.firstPhone, null);
+});
+test('leitor 15.5: id acima de 2^53 — a resposta certa é aplicada e o id da linha continua sendo o id pedido', async () => {
+  const wanted = '73987654321098765';
+  const body = JSON.parse('{"status":"ok","user":{"pk":73987654321098765,"pk_id":"73987654321098765","id":"73987654321098765","username":"grande","account_type":2,"is_business":true,"should_show_public_contacts":true,"public_email":"grande@loja.com"}}');
+  const x = deps([{ status: 200, body }]);
+  const r = await R.create(x.d)(wanted, 'grande', null);
+  assert.equal(r.contactOutcome, 'found'); assert.equal(r.publicContactResult.email, 'grande@loja.com');
+  assert.equal(r.contactUserId, wanted, 'a linha mantém o id exato pedido, nunca o número arredondado');
+  const other = deps([{ status: 200, body }]);
+  const bad = await R.create(other.d)('73987654321098000', 'grande', null);
+  assert.equal(bad.contactOutcome, 'identity_mismatch', 'a resposta de outro perfil continua recusada');
+  // resposta só com o pk numérico (já arredondado): a linha ainda recebe o id exato que foi pedido
+  const rounded = JSON.parse('{"status":"ok","user":{"pk":73987654321098765,"username":"grande2","account_type":2,"is_business":true,"should_show_public_contacts":true,"public_email":"g2@loja.com"}}');
+  const y = deps([{ status: 200, body: rounded }]);
+  const r2 = await R.create(y.d)(wanted, 'grande2', null);
+  assert.equal(r2.contactOutcome, 'found'); assert.equal(r2.contactUserId, wanted, 'nunca o número arredondado (73987654321098770)');
+});
+test('leitor 15.5: a rota do registro só existe quando a requisição informa o endereço enviado', async () => {
+  const withUrl = deps([{ status: 200, body: fixture('info-business.json'), url: 'https://www.instagram.com/api/v1/users/1000000001/info/' }]);
+  await R.create(withUrl.d)('1000000001', 'a', null);
+  assert.equal(withUrl.store[K.evidenceKey][0].sentRoute, 'GET https://www.instagram.com/api/v1/users/{id}/info/');
+  for (const bad of ['', 'not a url', 'javascript:alert(1)']) {
+    const x = deps([{ status: 200, body: fixture('info-business.json'), url: bad }]);
+    await R.create(x.d)('1000000001', 'a', null);
+    assert.equal(x.store[K.evidenceKey][0].sentRoute, undefined, JSON.stringify(bad));
+  }
+  assert.equal(K.requestRoute('https://www.instagram.com/api/v1/users/42/info/?a=1#b', '42'), 'GET https://www.instagram.com/api/v1/users/{id}/info/');
+});
+
+/* ---------- PATCHED 15.5, after the second-agent review ---------- */
+test('parser 15.5: ids contraditórios na mesma resposta seguem a ordem de sempre (pk, pk_id, id): um id exato que não bate é divergência', () => {
+  const body = (u) => ({ data: { user: Object.assign({ username: 'x' }, u) } });
+  assert.equal(P.locateProfile(body({ pk: 999, pk_id: '998', id: '123' }), '123', '').mismatch, true, 'pk exato decide, como na 15.4');
+  assert.equal(P.locateProfile(body({ pk: 123, pk_id: '998', id: '997' }), '123', '').mismatch, false);
+  assert.equal(P.locateProfile(body({ pk: '', pk_id: '123' }), '123', '').mismatch, false, 'id vazio não esconde os outros');
+  assert.equal(P.locateProfile(body({ pk: '', pk_id: '124' }), '123', '').mismatch, true);
+  // pk arredondado cede a um id exato da mesma resposta, mesmo que o exato seja de OUTRO perfil
+  const big = JSON.parse('{"user":{"pk":73987654321098765,"pk_id":"73987654321090000","username":"x"}}');
+  assert.equal(P.locateProfile({ data: big }, '73987654321098765', '').mismatch, true);
+  const ok = JSON.parse('{"user":{"pk":73987654321098765,"pk_id":"73987654321098765","username":"x"}}');
+  assert.equal(P.locateProfile({ data: ok }, '73987654321098765', '').mismatch, false);
+  // só o número arredondado: a resolução do double (16 neste porte) é o limite; o que está fora dela continua divergente
+  const only = JSON.parse('{"user":{"pk":73987654321098765,"username":"x"}}');
+  assert.equal(P.locateProfile({ data: only }, '73987654321098765', '').mismatch, false);
+  assert.equal(P.locateProfile({ data: only }, '73987654321090000', '').mismatch, true);
+});
+test('parser 15.5: campo de telefone com texto que não é telefone é "invalid", não "vazio ou oculto"', () => {
+  for (const text of ['ligue-nos', '12', '11 3333-4444 ramal 22', '+55']) {
+    const r = P.extract({ account_type: 2, should_show_public_contacts: true, contact_phone_number: text, public_phone_country_code: '55' });
+    assert.equal(r.phoneKeys.contact_phone_number, 'invalid', text); assert.equal(r.phone, ''); assert.equal(r.phoneStatus, 'invalid', text);
+  }
+  const mixed = P.extract({ account_type: 2, should_show_public_contacts: true, contact_phone_number: '11987654321', public_phone_number: 'ligue-nos', public_phone_country_code: '55' });
+  assert.equal(mixed.phone, '+5511987654321'); assert.equal(mixed.phoneStatus, 'found'); assert.equal(mixed.phoneKeys.public_phone_number, 'invalid');
+  const empty = P.extract({ account_type: 2, should_show_public_contacts: true, contact_phone_number: '', public_phone_country_code: '55' });
+  assert.equal(empty.phoneKeys.contact_phone_number, 'empty'); assert.equal(empty.phoneStatus, 'not_published');
+  const hidden = P.extract({ account_type: 2, should_show_public_contacts: false, contact_phone_number: 'ligue-nos' });
+  assert.equal(hidden.phoneStatus, 'not_published', 'contato oculto pelo perfil continua sendo "oculto"');
 });
